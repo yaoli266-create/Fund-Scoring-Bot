@@ -31,7 +31,7 @@ jobs:
         EMAIL_RECEIVER: ${{ secrets.EMAIL_RECEIVER }}
         SMTP_SERVER: smtp.qq.com
         SMTP_PORT: 465
-      run: python 基金智能打分.py
+      run: python 基金打分github.py
 
     - name: Upload Excel Artifact
       uses: actions/upload-artifact@v4
