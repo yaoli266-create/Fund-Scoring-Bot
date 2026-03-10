@@ -12,7 +12,7 @@ import warnings
 
 warnings.filterwarnings('ignore')
 
-print("🚀 启动全维量化大脑 (ETF专属网格版 + Top10精简报表)...")
+print("🚀 启动全维量化大脑 (ETF专属网格版 + 极简报表 + Top10推送)...")
 
 # ==========================================
 # 🔍 0. 构建全市场 ETF 名称映射字典
@@ -106,9 +106,9 @@ def process_single_fund(code):
         else:
             vol_1y = max_dd_1y = sharpe_1y = sortino_1y = None
 
-        # 网格步长：依旧采用波动率的1/10，上下限锁定为 1.5% 到 5.0%
+        # 网格步长：采用波动率的1/10，上下限锁定为 1.5% 到 5.0%
         grid_step = max(0.015, min(0.05, vol_1y / 10.0)) if vol_1y else 0.02
-
+        
         fund_name = name_dict.get(code, code) 
         
         # ---------------------------------------------------------
@@ -117,25 +117,21 @@ def process_single_fund(code):
         BASE_SCORE = 50
         final_score = BASE_SCORE
 
-        # 1. 均值回归因子 (ETF网格核心：重仓超跌，规避超买)
         if bias_val is not None:
-            if bias_val < -0.08: final_score += 35      # 极度超跌，绝佳捡筹码区间
-            elif bias_val < -0.05: final_score += 20    # 轻度超跌
-            elif bias_val > 0.08: final_score -= 35     # 极度超买，马上要回调
-            elif bias_val > 0.05: final_score -= 20     # 轻度超买
+            if bias_val < -0.08: final_score += 35      
+            elif bias_val < -0.05: final_score += 20    
+            elif bias_val > 0.08: final_score -= 35     
+            elif bias_val > 0.05: final_score -= 20     
 
-        # 2. 长期水位因子 (决胜于买入成本)
         if pct_1y is not None:
-            if pct_1y < 0.10: final_score += 30         # 跌至1年内冰点
-            elif pct_1y < 0.30: final_score += 15       # 底部区域
-            elif pct_1y > 0.90: final_score -= 40       # 历史天际线，接盘预警
-            elif pct_1y > 0.75: final_score -= 20       # 高位区域
+            if pct_1y < 0.10: final_score += 30         
+            elif pct_1y < 0.30: final_score += 15       
+            elif pct_1y > 0.90: final_score -= 40       
+            elif pct_1y > 0.75: final_score -= 20       
             
-        # 3. 趋势动能辅助 (左侧接刀也需要确认资金介入)
         if macd_hist_trend == 'improving': final_score += 5
         elif macd_hist_trend == 'deteriorating': final_score -= 5
 
-        # 4. 盈亏比验证 (夏普/索提诺)
         if sharpe_1y is not None:
             final_score += max(-10, min(10, (sharpe_1y - 0.5) * 8))
         if sortino_1y is not None:
@@ -158,7 +154,6 @@ def process_single_fund(code):
         last_year_df = df_k[df_k['date'].dt.year < current_year]
         ytd_ret = (cur_price_adj - last_year_df.iloc[-1]['close']) / last_year_df.iloc[-1]['close'] if not last_year_df.empty else None
         
-        # 返回装载好的单行数据字典 (去除了买卖挂单价)
         return {
             "代码": code,
             "名称": fund_name,
@@ -210,13 +205,17 @@ if len(results) > 0:
     df_output = pd.DataFrame(results)
     df_output.sort_values(by="综合得分", ascending=False, inplace=True)
     
-    # 将提取的排名前列基金改为 Top 10
+    # 修改点 1: 提取 Top 10
     top10 = df_output.head(10)
     summary_text += "🏆 【今日网格绝佳买入标的 Top 10】\n"
     summary_text += "-" * 30 + "\n"
     for idx, row in top10.iterrows():
         summary_text += f"▪️ {row['名称']} ({row['代码']})\n"
         summary_text += f"   得分: {row['综合得分']} | 建议: {row['操作评级']}\n"
+        # 修改点 2: 移除了买卖挂单价，保留精简的核心指标摘要
+        pct_1y_str = f"{row['1年百分位']*100:.1f}%" if pd.notnull(row['1年百分位']) else "无数据"
+        max_dd_str = f"{row['最大回撤']*100:.1f}%" if pd.notnull(row['最大回撤']) else "无数据"
+        summary_text += f"   1年百分位: {pct_1y_str} | 回撤: {max_dd_str} | 网格步长: {row['最佳网格步长']*100:.1f}%\n"
         summary_text += "-" * 30 + "\n"
     
     def format_to_pct(val):
@@ -235,4 +234,51 @@ if len(results) > 0:
             df_output[col] = df_output[col].apply(format_to_pct)
     
     excel_filename = "全量基金智能打分表.xlsx"
-    df_
+    df_output.to_excel(excel_filename, index=False, sheet_name='网格复盘')
+                        
+    print(f"\n🎉 完美收官！ETF专属网格参数矩阵已生成！")
+else:
+    print("\n⚠️ 抓取失败。")
+
+# ==========================================
+# 4. 邮件自动推送模块
+# ==========================================
+def send_excel_via_email(file_path, email_body_summary):
+    sender = os.getenv("EMAIL_SENDER")
+    password = os.getenv("EMAIL_PASSWORD") 
+    receiver = os.getenv("EMAIL_RECEIVER")
+    smtp_server = os.getenv("SMTP_SERVER", "smtp.qq.com")
+    smtp_port = int(os.getenv("SMTP_PORT", 465))
+    
+    if not all([sender, password, receiver]):
+        print("\n⚠️ 未配置邮箱环境变量 (Secrets)，跳过邮件发送步骤。")
+        return
+
+    print(f"\n📧 正在打包表格，准备发送至邮箱: {receiver} ...")
+    msg = MIMEMultipart()
+    msg['From'] = sender
+    msg['To'] = receiver
+    msg['Subject'] = f"📊 量化大脑：ETF网格智能参数与实战复盘 ({datetime.now().strftime('%Y-%m-%d')})"
+    
+    body = (
+        f"主人您好，今日的《ETF网格交易参数矩阵》演算完毕，请查收附件并参考标的。\n\n"
+        f"{email_body_summary}\n"
+        f"—— 自动量化机器人 敬上\n"
+    )
+    msg.attach(MIMEText(body, 'plain', 'utf-8'))
+    
+    try:
+        with open(file_path, "rb") as f:
+            part = MIMEApplication(f.read(), Name=os.path.basename(file_path))
+        part['Content-Disposition'] = f'attachment; filename="{os.path.basename(file_path)}"'
+        msg.attach(part)
+        server = smtplib.SMTP_SSL(smtp_server, smtp_port)
+        server.login(sender, password)
+        server.send_message(msg)
+        server.quit()
+        print("✅ 邮件发送成功！请检查您的收件箱。")
+    except Exception as e:
+        print(f"❌ 邮件发送失败: {e}")
+
+if len(results) > 0 and os.path.exists(excel_filename):
+    send_excel_via_email(excel_filename, summary_text)
