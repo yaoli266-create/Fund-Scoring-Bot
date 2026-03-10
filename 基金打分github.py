@@ -217,14 +217,14 @@ if len(results) > 0:
     df_output = pd.DataFrame(results)
     df_output.sort_values(by="综合得分", ascending=False, inplace=True)
     
-    top3 = df_output.head(3)
-    summary_text += "🏆 【今日网格绝佳买入标的 Top 3】\n"
+    top3 = df_output.head(10)
+    summary_text += "🏆 【今日网格绝佳买入标的 Top 10】\n"
     summary_text += "-" * 30 + "\n"
-    for idx, row in top3.iterrows():
+    for idx, row in top10.iterrows():
         summary_text += f"▪️ {row['名称']} ({row['代码']})\n"
         summary_text += f"   得分: {row['综合得分']} | 建议: {row['操作评级']}\n"
         # 直接把挂单价打印在邮件摘要里
-        summary_text += f"   🎯 下跌买入价: {row['买入挂单价']} | 上涨卖出价: {row['卖出挂单价']}\n"
+        #summary_text += f"   🎯 下跌买入价: {row['买入挂单价']} | 上涨卖出价: {row['卖出挂单价']}\n"
         summary_text += "-" * 30 + "\n"
     
     def format_to_pct(val):
@@ -292,3 +292,4 @@ def send_excel_via_email(file_path, email_body_summary):
 
 if len(results) > 0 and os.path.exists(excel_filename):
     send_excel_via_email(excel_filename, summary_text)
+
