@@ -12,7 +12,7 @@ import warnings
 
 warnings.filterwarnings('ignore')
 
-print("🚀 启动全维量化大脑 (ETF专属网格版 + 极简报表 + 自动算价)...")
+print("🚀 启动全维量化大脑 (ETF专属网格版 + Top10精简报表)...")
 
 # ==========================================
 # 🔍 0. 构建全市场 ETF 名称映射字典
@@ -108,10 +108,6 @@ def process_single_fund(code):
 
         # 网格步长：依旧采用波动率的1/10，上下限锁定为 1.5% 到 5.0%
         grid_step = max(0.015, min(0.05, vol_1y / 10.0)) if vol_1y else 0.02
-        
-        # 💡 新增：实战买卖挂单价计算
-        buy_trigger = round(cur_price_display * (1 - grid_step), 3)
-        sell_trigger = round(cur_price_display * (1 + grid_step), 3)
 
         fund_name = name_dict.get(code, code) 
         
@@ -145,7 +141,6 @@ def process_single_fund(code):
         if sortino_1y is not None:
             final_score += max(-10, min(15, (sortino_1y - 0.8) * 8))
 
-        # 评级文本微调以贴合网格交易
         if final_score >= 100: signal_text = "☄️ 绝对冰点-加大网格买入" 
         elif final_score >= 80: signal_text = "🔥 极度低估-启动网格建仓"
         elif final_score >= 65: signal_text = "💰 优质低估-逢低接底仓"
@@ -163,15 +158,13 @@ def process_single_fund(code):
         last_year_df = df_k[df_k['date'].dt.year < current_year]
         ytd_ret = (cur_price_adj - last_year_df.iloc[-1]['close']) / last_year_df.iloc[-1]['close'] if not last_year_df.empty else None
         
-        # 返回装载好的单行数据字典 (💡 删除了资产类型、年化波动率，新增买卖挂单价)
+        # 返回装载好的单行数据字典 (去除了买卖挂单价)
         return {
             "代码": code,
             "名称": fund_name,
             "综合得分": round(final_score, 1),
             "操作评级": signal_text,
             "最新净值": round(cur_price_display, 4),
-            "买入挂单价": buy_trigger,
-            "卖出挂单价": sell_trigger,
             "最佳网格步长": grid_step,
             "日波动(涨跌)": daily_pct,
             "1年百分位": pct_1y,
@@ -217,14 +210,13 @@ if len(results) > 0:
     df_output = pd.DataFrame(results)
     df_output.sort_values(by="综合得分", ascending=False, inplace=True)
     
-    top3 = df_output.head(10)
+    # 将提取的排名前列基金改为 Top 10
+    top10 = df_output.head(10)
     summary_text += "🏆 【今日网格绝佳买入标的 Top 10】\n"
     summary_text += "-" * 30 + "\n"
     for idx, row in top10.iterrows():
         summary_text += f"▪️ {row['名称']} ({row['代码']})\n"
         summary_text += f"   得分: {row['综合得分']} | 建议: {row['操作评级']}\n"
-        # 直接把挂单价打印在邮件摘要里
-        #summary_text += f"   🎯 下跌买入价: {row['买入挂单价']} | 上涨卖出价: {row['卖出挂单价']}\n"
         summary_text += "-" * 30 + "\n"
     
     def format_to_pct(val):
@@ -232,7 +224,6 @@ if len(results) > 0:
             return "-"
         return f"{val * 100:.2f}%"
 
-    # 更新了需格式化为百分比的列名
     pct_cols = [
         "日波动(涨跌)", "最佳网格步长", "1年百分位", "3年百分位", 
         "乖离率(20日)", "最大回撤", "今年以来", 
@@ -244,52 +235,4 @@ if len(results) > 0:
             df_output[col] = df_output[col].apply(format_to_pct)
     
     excel_filename = "全量基金智能打分表.xlsx"
-    df_output.to_excel(excel_filename, index=False, sheet_name='网格复盘')
-                        
-    print(f"\n🎉 完美收官！ETF专属网格参数矩阵已生成！")
-else:
-    print("\n⚠️ 抓取失败。")
-
-# ==========================================
-# 4. 邮件自动推送模块 (完全复用)
-# ==========================================
-def send_excel_via_email(file_path, email_body_summary):
-    sender = os.getenv("EMAIL_SENDER")
-    password = os.getenv("EMAIL_PASSWORD") 
-    receiver = os.getenv("EMAIL_RECEIVER")
-    smtp_server = os.getenv("SMTP_SERVER", "smtp.qq.com")
-    smtp_port = int(os.getenv("SMTP_PORT", 465))
-    
-    if not all([sender, password, receiver]):
-        print("\n⚠️ 未配置邮箱环境变量 (Secrets)，跳过邮件发送步骤。")
-        return
-
-    print(f"\n📧 正在打包表格，准备发送至邮箱: {receiver} ...")
-    msg = MIMEMultipart()
-    msg['From'] = sender
-    msg['To'] = receiver
-    msg['Subject'] = f"📊 量化大脑：ETF网格智能参数与实战复盘 ({datetime.now().strftime('%Y-%m-%d')})"
-    
-    body = (
-        f"主人您好，今日的《ETF网格交易参数矩阵》演算完毕，请查收附件并参考挂单。\n\n"
-        f"{email_body_summary}\n"
-        f"—— 自动量化机器人 敬上\n"
-    )
-    msg.attach(MIMEText(body, 'plain', 'utf-8'))
-    
-    try:
-        with open(file_path, "rb") as f:
-            part = MIMEApplication(f.read(), Name=os.path.basename(file_path))
-        part['Content-Disposition'] = f'attachment; filename="{os.path.basename(file_path)}"'
-        msg.attach(part)
-        server = smtplib.SMTP_SSL(smtp_server, smtp_port)
-        server.login(sender, password)
-        server.send_message(msg)
-        server.quit()
-        print("✅ 邮件发送成功！请检查您的收件箱。")
-    except Exception as e:
-        print(f"❌ 邮件发送失败: {e}")
-
-if len(results) > 0 and os.path.exists(excel_filename):
-    send_excel_via_email(excel_filename, summary_text)
-
+    df_
