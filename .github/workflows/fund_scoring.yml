@@ -24,14 +24,26 @@ jobs:
         python -m pip install --upgrade pip
         pip install akshare pandas numpy openpyxl requests
 
-    - name: Run Fund Scoring Script
+    # (前面安装依赖的代码保持不变)
+    
+    - name: 运行量化大脑 (ETF与个股双引擎)
       env:
         EMAIL_SENDER: ${{ secrets.EMAIL_SENDER }}
         EMAIL_PASSWORD: ${{ secrets.EMAIL_PASSWORD }}
         EMAIL_RECEIVER: ${{ secrets.EMAIL_RECEIVER }}
         SMTP_SERVER: smtp.qq.com
         SMTP_PORT: 465
-      run: python 基金打分github.py
+      run: |
+        python 基金智能打分.py
+        python 股票动能智能打分.py
+
+    - name: 提取云端运算结果包
+      uses: actions/upload-artifact@v4
+      with:
+        name: 今日量化综合复盘包
+        # 用星号匹配所有生成的 xlsx 文件
+        path: "*.xlsx"
+        retention-days: 7
 
     - name: Upload Excel Artifact
       uses: actions/upload-artifact@v4
