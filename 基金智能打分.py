@@ -12,15 +12,12 @@ import warnings
 
 warnings.filterwarnings('ignore')
 
-print("🚀 启动全维量化大脑 V4.0 (大类资产轮动 + 宏观风控 + Smart Money 资金流)...")
+print("🚀 启动全维量化大脑 (全市场动态活水池 + 大类资产轮动 + Smart Money)...")
 
 # ==========================================
-# 🛑 0. 顶层风控：沪深300 宏观风险嗅探 (决定网格密度)
+# 🛑 0. 顶层风控：沪深300 宏观风险嗅探
 # ==========================================
 def check_macro_risk():
-    """
-    检查沪深300是否跌破60日均线 (牛熊分水岭)
-    """
     print("正在嗅探宏观系统性风险 (沪深300趋势)...")
     try:
         df_index = ak.stock_zh_index_daily_em(symbol="sh000300")
@@ -39,8 +36,37 @@ def check_macro_risk():
 IS_BEAR_MARKET, HS300_CLOSE, HS300_MA60 = check_macro_risk()
 
 # ==========================================
-# 🧬 1. 资产分类器：打破“一刀切”的刻舟求剑
+# 🌊 1. 动态 ETF 活水池 (彻底告别本地 Excel)
 # ==========================================
+def get_liquid_etf_pool(top_n=150):
+    """
+    抓取全市场ETF，按成交额降序，只保留流动性最好的头部标的。
+    这是避免网格交易遭遇“极大买卖滑点”的核心风控。
+    """
+    print(f"正在扫描全市场近千只 ETF，提纯流动性最强的 Top {top_n} 活水池...")
+    try:
+        # 获取实时 ETF 盘口数据
+        spot_df = ak.fund_etf_spot_em()
+        
+        # 剔除名称或代码为空的无效数据
+        spot_df = spot_df.dropna(subset=['代码', '名称'])
+        
+        # 按“成交额”降序排列，资金去哪我们去哪
+        active_pool = spot_df.sort_values(by='成交额', ascending=False).head(top_n)
+        
+        stock_list = active_pool['代码'].tolist()
+        name_dict = dict(zip(active_pool['代码'], active_pool['名称']))
+        
+        print(f"✅ 成功锁定 {len(stock_list)} 只高流动性 ETF，摒弃所有滑点僵尸盘！")
+        return stock_list, name_dict
+    except Exception as e:
+        print(f"⚠️ 动态抓取失败: {e}")
+        fallback_list = ['510300', '159915', '512890', '518880', '513100']
+        return fallback_list, {c: c for c in fallback_list}
+
+# 获取名单与名称字典
+fund_list, name_dict = get_liquid_etf_pool(top_n=150)
+
 def classify_etf(name):
     """根据ETF名称划定底层大类资产属性"""
     if any(k in name for k in ['纳斯达克', '标普', '日经', '恒生', '港股', '亚太', '德国', '法国', '道琼斯', '海外']):
@@ -51,22 +77,6 @@ def classify_etf(name):
         return '宽基指数'
     else:
         return '行业主题'
-
-# 获取 ETF 名称映射字典
-print("正在拉取全市场 ETF 名称字典...")
-try:
-    spot_df = ak.fund_etf_spot_em()
-    name_dict = dict(zip(spot_df['代码'], spot_df['名称']))
-except Exception:
-    name_dict = {}
-
-try:
-    df_input = pd.read_excel('我的基金池.xlsx', dtype={'基金代码': str})
-    fund_list = df_input['基金代码'].dropna().str.strip().tolist()
-    print(f"✅ 成功读取 {len(fund_list)} 只目标ETF，准备启动并发演算...")
-except:
-    print("⚠️ 未找到 '我的基金池.xlsx'，进入测试模式...")
-    fund_list = ['510300', '159915', '512890', '518880', '513100'] # 包含宽基、行业、商品、海外
 
 current_year = datetime.now().year
 RISK_FREE_RATE = 0.02
@@ -92,7 +102,6 @@ def process_single_etf(code):
         df_k['vol'] = df_k['成交量'].astype(float)
         df_k['ret'] = df_k['涨跌幅'].astype(float) / 100.0 
         
-        # 指标计算
         df_k['MA20'] = df_k['close'].rolling(window=20).mean()
         df_k['MA60'] = df_k['close'].rolling(window=60).mean()
         df_k['Vol_MA20'] = df_k['vol'].rolling(window=20).mean()
@@ -109,57 +118,44 @@ def process_single_etf(code):
         fund_name = name_dict.get(code, code) 
         asset_class = classify_etf(fund_name)
         
-        # 基础网格步长 (波动率的 1/10)
         grid_step = max(0.015, min(0.06, vol_1y / 10.0)) if vol_1y else 0.025
         
-        # ---------------------------------------------------------
-        # 🧠 V4.0 多维度异构打分体系 
-        # ---------------------------------------------------------
         final_score = 50
         
-        # 💡 升级一：资金流 (Smart Money) 监测
-        # 机构左侧建仓特征：价格下跌或处于低位，但成交量极其异常地放大
+        # 资金流 (Smart Money) 监测
         is_smart_money_inflow = (today['ret'] < 0.01) and (today['vol'] > today['Vol_MA20'] * 1.8)
         if is_smart_money_inflow:
-            final_score += 25  # 极其强烈的底部主力托底信号
+            final_score += 25  
             
-        # 💡 升级二：宏观系统性风险过滤 (沪深300联动)
+        # 宏观系统性风险过滤 
         if IS_BEAR_MARKET:
             if asset_class in ['宽基指数', '行业主题']:
-                final_score -= 20      # 压制A股相关资产的买入冲动
-                grid_step *= 1.5       # 【核心】拉大网格间距，例如原来跌3%买，现在强行跌4.5%才买，防止资金打光
+                final_score -= 20      
+                grid_step *= 1.5       
             elif asset_class == '大宗商品':
-                final_score += 15      # 黄金等商品在A股熊市具有避险对冲价值，逆势加分
+                final_score += 15      
         else:
             if asset_class in ['宽基指数', '行业主题']:
-                final_score += 10      # 大盘安全时，鼓励参与A股网格
+                final_score += 10      
         
-        # 💡 升级三：大类资产异构打分
+        # 大类资产异构打分
         bias_val = today['BIAS20']
         
         if asset_class == '宽基指数':
-            # 宽基看重均值回归，跌出坑即可买
             if bias_val < -0.05: final_score += 20
             elif bias_val > 0.05: final_score -= 20
             
         elif asset_class == '行业主题':
-            # 行业波动剧烈，必须深跌（戴维斯双杀）才能重仓
-            if bias_val > -0.04: final_score -= 15  # 没跌透坚决不买
-            elif bias_val < -0.08: final_score += 30 # 跌透了大力出奇迹
-            if pct_1y is not None and pct_1y > 0.8: final_score -= 30 # 行业绝对不接高位盘
+            if bias_val > -0.04: final_score -= 15  
+            elif bias_val < -0.08: final_score += 30 
+            if pct_1y is not None and pct_1y > 0.8: final_score -= 30 
             
         elif asset_class == '海外跨境':
-            # 海外（如纳指）是长牛趋势属性，不能等深跌
-            if today['close'] > today['MA60']: final_score += 15 # 趋势向上顺势加分
-            if bias_val < -0.03: final_score += 15 # 稍微回踩就是绝佳买点
+            if today['close'] > today['MA60']: final_score += 15 
+            if bias_val < -0.03: final_score += 15 
             
         elif asset_class == '大宗商品':
-            # 商品独立行情，参考均线支撑
             if -0.03 <= bias_val <= 0.02: final_score += 10
-        
-        # 价格挂单测算
-        buy_trigger = round(today['close'] * (1 - grid_step), 3)
-        sell_trigger = round(today['close'] * (1 + grid_step), 3)
 
         if final_score >= 90: signal_text = "🔥 绝对冰点-加大网格买入" 
         elif final_score >= 70: signal_text = "💰 优质低估-启动网格建仓"
@@ -167,6 +163,7 @@ def process_single_etf(code):
         elif final_score <= 30: signal_text = "⚠️ 极度危险-缩小网格卖出"
         else: signal_text = "☢️ 高位泡沫-清空所有网格"
         
+        # 返回结果 (已删除买卖建议价)
         return {
             "代码": code,
             "名称": fund_name,
@@ -175,8 +172,6 @@ def process_single_etf(code):
             "操作建议": signal_text,
             "最新净值": round(today['close'], 4),
             "动态网格步长": grid_step,
-            "建议买入价": buy_trigger,
-            "建议卖出价": sell_trigger,
             "资金逆势流入": "✅ 主力潜伏" if is_smart_money_inflow else "-",
             "20日乖离率": bias_val,
             "1年百分位": pct_1y
@@ -207,10 +202,9 @@ with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
 summary_text = ""
 excel_filename = "ETF全天候网格战略报表.xlsx"
 
-# ⭐️ 宏观预警头部
 if IS_BEAR_MARKET:
     summary_text += f"🚨 【宏观风控警报】沪深300 ({HS300_CLOSE:.2f}) 跌破季线！\n"
-    summary_text += "🛡️ 系统已自动压制A股类ETF评分，并将网格步长拉大1.5倍以扩大防守纵深。建议重点关注黄金/海外对冲！\n"
+    summary_text += "🛡️ 系统已自动压制A股类ETF评分，并将网格步长拉大1.5倍。建议关注黄金/海外对冲！\n"
 else:
     summary_text += f"🟢 【宏观环境安全】沪深300 ({HS300_CLOSE:.2f}) 稳居季线上方，处于可进攻周期。\n"
 
@@ -219,7 +213,6 @@ summary_text += "=" * 45 + "\n"
 if len(results) > 0:
     df_output = pd.DataFrame(results)
     
-    # 格式化百分比
     def format_to_pct(val):
         if pd.isna(val) or val is None: return "-"
         return f"{val * 100:.2f}%"
@@ -230,19 +223,18 @@ if len(results) > 0:
     df_output.sort_values(by=["综合得分", "资产类别"], ascending=[False, True], inplace=True)
     
     top10 = df_output.head(10)
-    summary_text += "🎯 【V4.0 大类资产网格优选 Top 10】\n"
+    summary_text += "🎯 【大类资产网格优选 Top 10】(高流动性过滤版)\n"
     summary_text += "-" * 45 + "\n"
     for idx, row in top10.iterrows():
-        # 若检测到异常放量的资金流入，重点标红
         money_flow_flag = " 💸[主力左侧流入!]" if row['资金逆势流入'] != "-" else ""
         
+        # 移除了买卖挂单价，邮件展现更加清爽极简
         summary_text += f"▪️ {row['名称']} ({row['代码']}) - 【{row['资产类别']}】{money_flow_flag}\n"
-        summary_text += f"   得分: {row['综合得分']} | {row['操作建议']}\n"
-        summary_text += f"   🎯 步长: {row['动态网格步长']} | 下跌买入价: {row['建议买入价']} | 上涨卖出价: {row['建议卖出价']}\n"
+        summary_text += f"   得分: {row['综合得分']} | {row['操作建议']} | 步长: {row['动态网格步长']}\n"
         summary_text += "-" * 45 + "\n"
     
     df_output.to_excel(excel_filename, index=False, sheet_name='大类资产网格')
-    print(f"\n🎉 V4.0 全息资产矩阵演算完毕！")
+    print(f"\n🎉 动态活水池全息资产矩阵演算完毕！")
 else:
     print("\n⚠️ 抓取失败。")
 
@@ -261,11 +253,11 @@ def send_excel_via_email(file_path, email_body_summary):
     msg['To'] = receiver
     
     if IS_BEAR_MARKET:
-        msg['Subject'] = f"🚨 宏观防守：ETF网格战略风控报表 ({datetime.now().strftime('%Y-%m-%d')})"
+        msg['Subject'] = f"🚨 宏观防守：ETF战略风控雷达 ({datetime.now().strftime('%Y-%m-%d')})"
     else:
-        msg['Subject'] = f"🚀 宏观进攻：ETF全天候资产轮动雷达 ({datetime.now().strftime('%Y-%m-%d')})"
+        msg['Subject'] = f"🚀 宏观进攻：ETF资产轮动雷达 ({datetime.now().strftime('%Y-%m-%d')})"
     
-    body = f"主人您好，今日的《V4.0 ETF全天候大类资产轮动与网格报表》已生成。\n\n{email_body_summary}\n—— 自动量化大脑 敬上\n"
+    body = f"主人您好，今日的《ETF全天候大类资产轮动报表》已生成。\n\n{email_body_summary}\n—— 自动量化大脑 敬上\n"
     msg.attach(MIMEText(body, 'plain', 'utf-8'))
     
     if os.path.exists(file_path):
