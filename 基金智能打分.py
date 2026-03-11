@@ -222,14 +222,15 @@ def process_fund(code, market_state, top_sectors):
 def send_email_with_excel(file_path):
     print("\n📧 正在打包发送投研报表邮件...")
     
-    # 从云端环境变量/Secrets拉取鉴权信息
-    sender = os.getenv('MAIL_USERNAME')
-    pwd = os.getenv('MAIL_PASSWORD')
-    receiver = os.getenv('MAIL_RECEIVER')
+    # 【修改这里】：与 GitHub Secrets 的名称保持完全一致
+    sender = os.getenv('EMAIL_SENDER')
+    pwd = os.getenv('EMAIL_PASSWORD')
+    receiver = os.getenv('EMAIL_RECEIVER')
     
     if not all([sender, pwd, receiver]):
-        print("⚠️ 提醒: 未检测到完整的邮件配置 (MAIL_USERNAME/MAIL_PASSWORD/MAIL_RECEIVER)，跳过发送。\n如在本地运行，此提示正常；如在 GitHub 运行，请检查 Secrets 配置。")
+        print("⚠️ 提醒: 未检测到完整的邮件配置 (EMAIL_SENDER/EMAIL_PASSWORD/EMAIL_RECEIVER)，跳过发送。")
         return
+    # ... 下面的代码保持不变 ...
 
     msg = MIMEMultipart()
     msg['From'] = sender
@@ -317,3 +318,4 @@ if __name__ == "__main__":
         
     else:
         print("\n\n❌ 未能萃取到有效信号，请检查上游接口状态或网络配置。")
+
