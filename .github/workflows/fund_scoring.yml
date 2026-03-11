@@ -3,7 +3,7 @@ name: 基金智能打分大脑
 on:
   schedule:
     # 每天北京时间 16:30 执行 (UTC 08:30)
-    - cron: '30 8 * * 1-5'
+    - cron: '33 8 * * 1-5'
   workflow_dispatch: 
 
 jobs:
