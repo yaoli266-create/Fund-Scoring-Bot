@@ -9,10 +9,26 @@ from email.mime.text import MIMEText
 from email.mime.application import MIMEApplication
 from datetime import datetime, timedelta
 import warnings
+import time
+import random
 
 warnings.filterwarnings('ignore')
 
 print("🚀 启动全维量化大脑 (全市场动态活水池 + 大类资产轮动 + Smart Money)...")
+
+# ==========================================
+# 🛡️ 核心强化：智能重试引擎 (防超时与限流)
+# ==========================================
+def robust_akshare_call(func, *args, max_retries=3, **kwargs):
+    for attempt in range(max_retries):
+        try:
+            return func(*args, **kwargs)
+        except Exception as e:
+            if attempt < max_retries - 1:
+                sleep_time = (2 ** attempt) + random.uniform(0.5, 1.5)
+                time.sleep(sleep_time)
+            else:
+                raise e
 
 # ==========================================
 # 🛑 0. 顶层风控：沪深300 宏观风险嗅探
@@ -20,7 +36,7 @@ print("🚀 启动全维量化大脑 (全市场动态活水池 + 大类资产轮
 def check_macro_risk():
     print("正在嗅探宏观系统性风险 (沪深300趋势)...")
     try:
-        df_index = ak.stock_zh_index_daily_em(symbol="sh000300")
+        df_index = robust_akshare_call(ak.stock_zh_index_daily_em, symbol="sh000300")
         df_index['MA60'] = df_index['close'].rolling(window=60).mean()
         today_close = df_index.iloc[-1]['close']
         ma60 = df_index.iloc[-1]['MA60']
@@ -39,19 +55,10 @@ IS_BEAR_MARKET, HS300_CLOSE, HS300_MA60 = check_macro_risk()
 # 🌊 1. 动态 ETF 活水池 (彻底告别本地 Excel)
 # ==========================================
 def get_liquid_etf_pool(top_n=150):
-    """
-    抓取全市场ETF，按成交额降序，只保留流动性最好的头部标的。
-    这是避免网格交易遭遇“极大买卖滑点”的核心风控。
-    """
     print(f"正在扫描全市场近千只 ETF，提纯流动性最强的 Top {top_n} 活水池...")
     try:
-        # 获取实时 ETF 盘口数据
-        spot_df = ak.fund_etf_spot_em()
-        
-        # 剔除名称或代码为空的无效数据
+        spot_df = robust_akshare_call(ak.fund_etf_spot_em)
         spot_df = spot_df.dropna(subset=['代码', '名称'])
-        
-        # 按“成交额”降序排列，资金去哪我们去哪
         active_pool = spot_df.sort_values(by='成交额', ascending=False).head(top_n)
         
         stock_list = active_pool['代码'].tolist()
@@ -64,11 +71,9 @@ def get_liquid_etf_pool(top_n=150):
         fallback_list = ['510300', '159915', '512890', '518880', '513100']
         return fallback_list, {c: c for c in fallback_list}
 
-# 获取名单与名称字典
 fund_list, name_dict = get_liquid_etf_pool(top_n=150)
 
 def classify_etf(name):
-    """根据ETF名称划定底层大类资产属性"""
     if any(k in name for k in ['纳斯达克', '标普', '日经', '恒生', '港股', '亚太', '德国', '法国', '道琼斯', '海外']):
         return '海外跨境'
     elif any(k in name for k in ['黄金', '白银', '豆粕', '有色', '能源', '大宗']):
@@ -85,34 +90,38 @@ RISK_FREE_RATE = 0.02
 # ⚡️ 2. 核心算力：多策略异构打分引擎
 # ==========================================
 def process_single_etf(code):
+    time.sleep(random.uniform(0.5, 1.5)) # 🔴 强制休眠伪装人类
+    
     code = str(code).zfill(6)
     end_date = datetime.now()
     start_date = end_date - timedelta(days=365 * 3)
     
     try:
-        df_k = ak.fund_etf_hist_em(
-            symbol=code, period="daily", 
+        df_k = robust_akshare_call(
+            ak.fund_etf_hist_em, symbol=code, period="daily", 
             start_date=start_date.strftime("%Y%m%d"), 
             end_date=end_date.strftime("%Y%m%d"), adjust="qfq"
         )
         if df_k is None or df_k.empty or len(df_k) < 65: return None 
             
         df_k['date'] = pd.to_datetime(df_k['日期'])
-        df_k['close'] = df_k['收盘'].astype(float)
+        
+        # 🎯 核心校准：使用前复权后的收盘价作为累计净值，包含分红因素，更精准反映真实回撤与偏差
+        df_k['cumulative_net_value'] = df_k['收盘'].astype(float) 
         df_k['vol'] = df_k['成交量'].astype(float)
         df_k['ret'] = df_k['涨跌幅'].astype(float) / 100.0 
         
-        df_k['MA20'] = df_k['close'].rolling(window=20).mean()
-        df_k['MA60'] = df_k['close'].rolling(window=60).mean()
+        df_k['MA20'] = df_k['cumulative_net_value'].rolling(window=20).mean()
+        df_k['MA60'] = df_k['cumulative_net_value'].rolling(window=60).mean()
         df_k['Vol_MA20'] = df_k['vol'].rolling(window=20).mean()
-        df_k['BIAS20'] = (df_k['close'] - df_k['MA20']) / df_k['MA20']
+        df_k['BIAS20'] = (df_k['cumulative_net_value'] - df_k['MA20']) / df_k['MA20']
         
         today = df_k.iloc[-1]
         yesterday = df_k.iloc[-2]
         
         df_1y = df_k.tail(250)
-        max_1y, min_1y = df_1y['close'].max(), df_1y['close'].min()
-        pct_1y = (today['close'] - min_1y) / (max_1y - min_1y) if max_1y > min_1y else None
+        max_1y, min_1y = df_1y['cumulative_net_value'].max(), df_1y['cumulative_net_value'].min()
+        pct_1y = (today['cumulative_net_value'] - min_1y) / (max_1y - min_1y) if max_1y > min_1y else None
         vol_1y = df_1y['ret'].std() * np.sqrt(250) if len(df_1y) > 10 else None
 
         fund_name = name_dict.get(code, code) 
@@ -122,12 +131,10 @@ def process_single_etf(code):
         
         final_score = 50
         
-        # 资金流 (Smart Money) 监测
         is_smart_money_inflow = (today['ret'] < 0.01) and (today['vol'] > today['Vol_MA20'] * 1.8)
         if is_smart_money_inflow:
             final_score += 25  
             
-        # 宏观系统性风险过滤 
         if IS_BEAR_MARKET:
             if asset_class in ['宽基指数', '行业主题']:
                 final_score -= 20      
@@ -138,7 +145,6 @@ def process_single_etf(code):
             if asset_class in ['宽基指数', '行业主题']:
                 final_score += 10      
         
-        # 大类资产异构打分
         bias_val = today['BIAS20']
         
         if asset_class == '宽基指数':
@@ -151,7 +157,7 @@ def process_single_etf(code):
             if pct_1y is not None and pct_1y > 0.8: final_score -= 30 
             
         elif asset_class == '海外跨境':
-            if today['close'] > today['MA60']: final_score += 15 
+            if today['cumulative_net_value'] > today['MA60']: final_score += 15 
             if bias_val < -0.03: final_score += 15 
             
         elif asset_class == '大宗商品':
@@ -163,14 +169,13 @@ def process_single_etf(code):
         elif final_score <= 30: signal_text = "⚠️ 极度危险-缩小网格卖出"
         else: signal_text = "☢️ 高位泡沫-清空所有网格"
         
-        # 返回结果 (已删除买卖建议价)
         return {
             "代码": code,
             "名称": fund_name,
             "资产类别": asset_class,
             "综合得分": round(final_score, 1),
             "操作建议": signal_text,
-            "最新净值": round(today['close'], 4),
+            "最新净值": round(today['cumulative_net_value'], 4),
             "动态网格步长": grid_step,
             "资金逆势流入": "✅ 主力潜伏" if is_smart_money_inflow else "-",
             "20日乖离率": bias_val,
@@ -180,10 +185,10 @@ def process_single_etf(code):
         return None
 
 # ==========================================
-# 🚀 3. 多线程并发扫描
+# 🚀 3. 多线程并发扫描 (降维防脱网)
 # ==========================================
 results = []
-MAX_WORKERS = 10 
+MAX_WORKERS = 3  # 🔴 控制在3线程并发，以时间换空间
 
 print(f"⚡ 正在分配火力，开启 {MAX_WORKERS} 个并发线程执行大类资产演算...")
 
@@ -228,7 +233,6 @@ if len(results) > 0:
     for idx, row in top10.iterrows():
         money_flow_flag = " 💸[主力左侧流入!]" if row['资金逆势流入'] != "-" else ""
         
-        # 移除了买卖挂单价，邮件展现更加清爽极简
         summary_text += f"▪️ {row['名称']} ({row['代码']}) - 【{row['资产类别']}】{money_flow_flag}\n"
         summary_text += f"   得分: {row['综合得分']} | {row['操作建议']} | 步长: {row['动态网格步长']}\n"
         summary_text += "-" * 45 + "\n"
