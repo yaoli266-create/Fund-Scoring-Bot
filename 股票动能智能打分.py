@@ -81,6 +81,8 @@ stock_list, name_dict, spot_info_dict = get_active_stock_pool(top_n=500)
 # ⚡️ 2. 核心算力：V3.0 Pro 游资主升浪打分引擎
 # ==========================================
 def process_single_stock(code):
+    time.sleep(random.uniform(0.5, 1.5)) # 🔴 强制休眠伪装人类
+    
     code = str(code).zfill(6)
     end_date = datetime.now()
     start_date = end_date - timedelta(days=200) 
@@ -99,11 +101,10 @@ def process_single_stock(code):
         df_k['close'] = df_k['收盘'].astype(float)
         df_k['open'] = df_k['开盘'].astype(float)
         df_k['high'] = df_k['最高'].astype(float)
-        df_k['low'] = df_k['最低'].astype(float)  # 修复补齐最低价数据
+        df_k['low'] = df_k['最低'].astype(float) 
         df_k['vol'] = df_k['成交量'].astype(float)
         df_k['pct_change'] = df_k['涨跌幅'].astype(float)
         
-        # 基础指标计算
         df_k['MA5'] = df_k['close'].rolling(window=5).mean()
         df_k['MA10'] = df_k['close'].rolling(window=10).mean()
         df_k['MA20'] = df_k['close'].rolling(window=20).mean()
@@ -117,17 +118,14 @@ def process_single_stock(code):
         signal_line = macd_line.ewm(span=9, adjust=False).mean()
         df_k['MACD_hist'] = macd_line - signal_line
 
-        # 核心阿尔法因子
         df_k['is_limit_up'] = (df_k['pct_change'] >= 9.5).astype(int)
         df_k['recent_limit_up'] = df_k['is_limit_up'].rolling(window=20).sum()
         df_k['rolling_high_20'] = df_k['high'].rolling(window=20).max().shift(1)
 
-        # ⚔️ 高阶进阶 1：K线形态测算 (上影线与实体比例)
         df_k['body_size'] = abs(df_k['close'] - df_k['open'])
         df_k['upper_shadow'] = df_k['high'] - df_k[['close', 'open']].max(axis=1)
         df_k['shadow_ratio'] = df_k['upper_shadow'] / (df_k['body_size'] + 0.001)
 
-        # 🛡️ 高阶进阶 2：筹码盘整紧密性 (10日价格振幅)
         df_k['rolling_high_10'] = df_k['high'].rolling(window=10).max().shift(1)
         df_k['rolling_low_10'] = df_k['low'].rolling(window=10).min().shift(1)
         df_k['consolidation_range'] = (df_k['rolling_high_10'] - df_k['rolling_low_10']) / df_k['rolling_low_10']
@@ -135,40 +133,33 @@ def process_single_stock(code):
         today = df_k.iloc[-1]
         yesterday = df_k.iloc[-2]
         
-        # 🧠 V3.0 Pro 动能打分体系
         BASE_SCORE = 50
         final_score = BASE_SCORE
 
         if not IS_MARKET_GOOD: final_score -= 30
 
-        # 趋势护航
         if today['close'] > today['MA20'] and today['MA20'] > today['MA60']: final_score += 15  
         elif today['close'] < today['MA60']: final_score -= 30  
         if today['close'] > today['MA5'] and today['MA5'] > today['MA10'] and today['MA10'] > today['MA20']: final_score += 15  
 
-        # 涨停基因
         if today['recent_limit_up'] >= 1: final_score += 10  
         else: final_score -= 5   
 
-        # 平台突破与筹码紧密性结合
         if today['close'] > today['rolling_high_20']:
             final_score += 15  
-            if today['consolidation_range'] < 0.12: final_score += 20  # 极度缩量横盘后起爆
-            elif today['consolidation_range'] > 0.30: final_score -= 15 # 宽幅震荡假突破过滤
+            if today['consolidation_range'] < 0.12: final_score += 20  
+            elif today['consolidation_range'] > 0.30: final_score -= 15 
 
-        # 真实量能比对
         vol_ratio = today['vol'] / yesterday['Vol_MA20'] if yesterday['Vol_MA20'] > 0 else 1
         if 1.5 <= vol_ratio <= 4.0 and today['close'] > today['open']: final_score += 15  
         elif vol_ratio > 5.0: final_score -= 15  
         elif vol_ratio < 0.6 and today['close'] < today['open']: final_score -= 10  
 
-        # 辅助验证
         if today['MACD_hist'] > yesterday['MACD_hist'] and today['MACD_hist'] > 0: final_score += 10  
         bias_val = today['BIAS20']
         if bias_val > 0.15: final_score -= 20  
         elif -0.02 <= bias_val <= 0.08: final_score += 10  
 
-        # 避雷针形态惩罚
         if today['shadow_ratio'] > 2.0 and today['upper_shadow'] > today['close'] * 0.02:
             final_score -= 40  
 
@@ -194,10 +185,10 @@ def process_single_stock(code):
         return None
 
 # ==========================================
-# 🚀 3. 多线程并发扫描
+# 🚀 3. 多线程并发扫描 (降维防脱网)
 # ==========================================
 results = []
-MAX_WORKERS = 15 
+MAX_WORKERS = 3  # 🔴 控制在3线程并发，以时间换空间
 print(f"⚡ 正在分配火力，开启 {MAX_WORKERS} 个并发线程...")
 
 with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
@@ -254,7 +245,6 @@ def send_excel_via_email(file_path, email_body_summary):
     sender = os.getenv("EMAIL_SENDER")
     password = os.getenv("EMAIL_PASSWORD") 
     receiver = os.getenv("EMAIL_RECEIVER")
-    # 默认QQ邮箱SMTP，如果是网易则填 smtp.163.com
     smtp_server = os.getenv("SMTP_SERVER", "smtp.qq.com")
     smtp_port = int(os.getenv("SMTP_PORT", 465))
     
@@ -267,27 +257,4 @@ def send_excel_via_email(file_path, email_body_summary):
     msg['To'] = receiver
     
     date_str = datetime.now().strftime('%Y-%m-%d')
-    msg['Subject'] = f"🚀 游资雷达：A股主升浪突破阵型 ({date_str})" if IS_MARKET_GOOD else f"🚨 警报：大盘破位！防御报告 ({date_str})"
-    
-    body = f"主人您好，今日的《V3.0 Pro 主升浪猎杀名单》已生成。\n\n{email_body_summary}\n—— 自动量化机器人 敬上\n"
-    msg.attach(MIMEText(body, 'plain', 'utf-8'))
-    
-    if os.path.exists(file_path):
-        try:
-            with open(file_path, "rb") as f:
-                part = MIMEApplication(f.read(), Name=os.path.basename(file_path))
-            part['Content-Disposition'] = f'attachment; filename="{os.path.basename(file_path)}"'
-            msg.attach(part)
-        except Exception as e:
-            pass
-        
-    try:
-        server = smtplib.SMTP_SSL(smtp_server, smtp_port)
-        server.login(sender, password)
-        server.send_message(msg)
-        server.quit()
-        print("✅ 股票动能邮件发送成功！")
-    except Exception as e:
-        print(f"❌ 邮件发送失败: {e}")
-
-send_excel_via_email(excel_filename, summary_text)
+    msg['Subject'] =
