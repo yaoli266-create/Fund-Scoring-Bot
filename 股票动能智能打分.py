@@ -257,4 +257,27 @@ def send_excel_via_email(file_path, email_body_summary):
     msg['To'] = receiver
     
     date_str = datetime.now().strftime('%Y-%m-%d')
-    msg['Subject'] =
+    msg['Subject'] = f"🚀 游资雷达：A股主升浪突破阵型 ({date_str})" if IS_MARKET_GOOD else f"🚨 警报：大盘破位！防御报告 ({date_str})"
+    
+    body = f"主人您好，今日的《V3.0 Pro 主升浪猎杀名单》已生成。\n\n{email_body_summary}\n—— 自动量化机器人 敬上\n"
+    msg.attach(MIMEText(body, 'plain', 'utf-8'))
+    
+    if os.path.exists(file_path):
+        try:
+            with open(file_path, "rb") as f:
+                part = MIMEApplication(f.read(), Name=os.path.basename(file_path))
+            part['Content-Disposition'] = f'attachment; filename="{os.path.basename(file_path)}"'
+            msg.attach(part)
+        except Exception as e:
+            pass
+        
+    try:
+        server = smtplib.SMTP_SSL(smtp_server, smtp_port)
+        server.login(sender, password)
+        server.send_message(msg)
+        server.quit()
+        print("✅ 股票动能邮件发送成功！")
+    except Exception as e:
+        print(f"❌ 邮件发送失败: {e}")
+
+send_excel_via_email(excel_filename, summary_text)
