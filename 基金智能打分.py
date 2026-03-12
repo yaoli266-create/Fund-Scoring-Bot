@@ -217,20 +217,18 @@ def process_fund(code, market_state, top_sectors):
     }
 
 # =========================
-# 自动化邮件推送模块
+# 自动化邮件推送模块 (已升级 Top10 摘要)
 # =========================
-def send_email_with_excel(file_path):
-    print("\n📧 正在打包发送投研报表邮件...")
+def send_email_with_excel(file_path, df_left, df_right, market_state, top_sectors):
+    print("\n📧 正在打包发送投研报表邮件 (包含 Top10 摘要)...")
     
-    # 【修改这里】：与 GitHub Secrets 的名称保持完全一致
     sender = os.getenv('EMAIL_SENDER')
     pwd = os.getenv('EMAIL_PASSWORD')
     receiver = os.getenv('EMAIL_RECEIVER')
     
     if not all([sender, pwd, receiver]):
-        print("⚠️ 提醒: 未检测到完整的邮件配置 (EMAIL_SENDER/EMAIL_PASSWORD/EMAIL_RECEIVER)，跳过发送。")
+        print("⚠️ 提醒: 未检测到完整的邮件配置，跳过发送。")
         return
-    # ... 下面的代码保持不变 ...
 
     msg = MIMEMultipart()
     msg['From'] = sender
@@ -238,13 +236,30 @@ def send_email_with_excel(file_path):
     today_str = datetime.now().strftime('%Y-%m-%d')
     msg['Subject'] = f"量化大脑矩阵 v9.0 - {today_str}"
 
-    body = (
-        f"自动运行完成，请查收今日的【双引擎】量化评分报表。\n\n"
-        f"📊 宏观状态: {market_state}\n"
-        f"🏆 强势赛道: {', '.join(top_sectors)}\n\n"
-        f"* 本报表由云端系统自动构建。\n"
-        f"* 技术指标已严格运用累计复权净值推演，剔除分红干扰。"
-    )
+    # 提取左右侧 Top 10 数据
+    left_top10 = df_left.head(10)
+    right_top10 = df_right.head(10)
+
+    # 构建邮件正文
+    body = f"自动运行完成，请查收今日的【双引擎】量化评分报表。\n\n"
+    body += f"📊 宏观状态: 【{market_state}】\n"
+    body += f"🏆 强势赛道 Top 3: {', '.join(top_sectors)}\n\n"
+
+    body += "====================================\n"
+    body += "🟢 策略A：左侧网格 (低估反转) TOP 10\n"
+    body += "====================================\n"
+    for i, (_, row) in enumerate(left_top10.iterrows(), 1):
+        body += f"{i}. {row['代码']} {row['名称']} | 得分: {row['左侧_反转得分']} | 建议: {row['左侧_操作建议']} | 1年位置: {row['1年百分位']}%\n"
+
+    body += "\n====================================\n"
+    body += "🔴 策略B：右侧趋势 (动量轮动) TOP 10\n"
+    body += "====================================\n"
+    for i, (_, row) in enumerate(right_top10.iterrows(), 1):
+        body += f"{i}. {row['代码']} {row['名称']} | 得分: {row['右侧_动量得分']} | 建议: {row['右侧_操作建议']} | 60日动量: {row['60日动量']}%\n"
+
+    body += "\n\n* 详细的完整指标（夏普、回撤、乖离等）及其他基金评分，请查阅附件 Excel。\n"
+    body += "* 技术指标及BIAS均已严格运用累计复权净值推演，剔除分红干扰。"
+
     msg.attach(MIMEText(body, 'plain', 'utf-8'))
 
     # 挂载 Excel 附件
@@ -257,16 +272,15 @@ def send_email_with_excel(file_path):
         print(f"❌ 附件读取失败: {e}")
         return
 
-    # 发送请求 (默认采用 QQ 邮箱配置，若使用其他服务商请调整 smtp.qq.com 及端口)
+    # 发送请求
     try:
         server = smtplib.SMTP_SSL("smtp.qq.com", 465) 
         server.login(sender, pwd)
         server.sendmail(sender, receiver, msg.as_string())
         server.quit()
-        print("✅ 邮件发送成功！策略报表已触达。")
+        print("✅ 邮件发送成功！策略报表及摘要已触达。")
     except Exception as e:
         print(f"❌ 邮件发送失败: {e}")
-
 # =========================
 # 系统执行主进程
 # =========================
@@ -318,4 +332,5 @@ if __name__ == "__main__":
         
     else:
         print("\n\n❌ 未能萃取到有效信号，请检查上游接口状态或网络配置。")
+
 
