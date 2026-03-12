@@ -14,28 +14,21 @@ import random
 
 warnings.filterwarnings('ignore')
 
-print("🚀 启动全维量化大脑 V3.0 Pro (本地极速版 + 自适应防封锁装甲)...")
+print("🚀 启动全维量化大脑 V3.1 Pro (云端自适应防封锁装甲版)...")
 
 # ==========================================
 # 🛡️ 核心强化 1：自适应指数退避重试引擎
 # ==========================================
 def robust_akshare_call(func, *args, max_retries=5, **kwargs):
-    """
-    不仅捕获网络崩溃，还能精准识别东方财富返回的“幽灵空数据”并触发重试。
-    采用指数级退避算法 (Exponential Backoff)，越失败等得越久，保护本地 IP。
-    """
     for attempt in range(max_retries):
         try:
             res = func(*args, **kwargs)
-            # 核心防御：识别接口返回的空数据（假成功，真限流）
             if res is None or (isinstance(res, pd.DataFrame) and res.empty):
                 raise ValueError("⚠️ 接口返回空数据，疑似触发反爬限流阈值")
             return res
         except Exception as e:
             if attempt < max_retries - 1:
-                # 指数退避：重试间隔为 1.5s, 3.25s, 6.6s... 迅速降温
                 sleep_time = (1.5 ** (attempt + 1)) + random.uniform(0.1, 0.5)
-                # print(f"  [引擎降温] 触发限流，{sleep_time:.1f}秒后发起第 {attempt+2} 次突围...")
                 time.sleep(sleep_time)
             else:
                 print(f"❌ 接口彻底熔断: {e}")
@@ -87,11 +80,11 @@ def get_custom_stock_pool():
 stock_list = get_custom_stock_pool()
 
 # ==========================================
-# ⚡️ 2. 核心算力：V3.0 Pro 游资主升浪打分引擎
+# ⚡️ 2. 核心算力：V3.1 Pro 游资主升浪打分引擎
 # ==========================================
 def process_single_stock(code):
-    # 🛡️ 核心强化 2：移除长休眠，改为毫秒级微小抖动，防止并发瞬间撕裂接口
-    time.sleep(random.uniform(0.05, 0.15)) 
+    # 增加微小抖动，防止高频并发撕裂东方财富接口
+    time.sleep(random.uniform(0.1, 0.3)) 
     
     code = str(code).zfill(6)
     end_date = datetime.now()
@@ -114,6 +107,8 @@ def process_single_stock(code):
         df_k['low'] = df_k['最低'].astype(float) 
         df_k['vol'] = df_k['成交量'].astype(float)
         df_k['pct_change'] = df_k['涨跌幅'].astype(float)
+        # 🛠️ 修复：精准提取换手率，避免输出全是 0.0%
+        df_k['turnover'] = df_k['换手率'].astype(float) if '换手率' in df_k.columns else 0.0
         
         df_k['MA5'] = df_k['close'].rolling(window=5).mean()
         df_k['MA10'] = df_k['close'].rolling(window=10).mean()
@@ -132,13 +127,15 @@ def process_single_stock(code):
         df_k['recent_limit_up'] = df_k['is_limit_up'].rolling(window=20).sum()
         df_k['rolling_high_20'] = df_k['high'].rolling(window=20).max().shift(1)
 
+        # 🛠️ 修复：防止一字板导致 body_size 为 0 触发报错
         df_k['body_size'] = abs(df_k['close'] - df_k['open'])
         df_k['upper_shadow'] = df_k['high'] - df_k[['close', 'open']].max(axis=1)
-        df_k['shadow_ratio'] = df_k['upper_shadow'] / (df_k['body_size'] + 0.001)
+        df_k['shadow_ratio'] = df_k['upper_shadow'] / (df_k['body_size'].replace(0, 0.001))
 
         df_k['rolling_high_10'] = df_k['high'].rolling(window=10).max().shift(1)
         df_k['rolling_low_10'] = df_k['low'].rolling(window=10).min().shift(1)
-        df_k['consolidation_range'] = (df_k['rolling_high_10'] - df_k['rolling_low_10']) / df_k['rolling_low_10']
+        # 🛠️ 修复：严密防范分母为零与 NaN 蔓延
+        df_k['consolidation_range'] = (df_k['rolling_high_10'] - df_k['rolling_low_10']) / df_k['rolling_low_10'].replace(0, 0.001)
 
         today = df_k.iloc[-1]
         yesterday = df_k.iloc[-2]
@@ -152,30 +149,36 @@ def process_single_stock(code):
         elif today['close'] < today['MA60']: final_score -= 30  
         if today['close'] > today['MA5'] and today['MA5'] > today['MA10'] and today['MA10'] > today['MA20']: final_score += 15  
 
-        if today['recent_limit_up'] >= 1: final_score += 10  
-        else: final_score -= 5   
+        # 🛠️ 优化：只奖励龙头，不盲目惩罚大盘蓝筹
+        if pd.notna(today['recent_limit_up']) and today['recent_limit_up'] >= 1: 
+            final_score += 10  
 
         if today['close'] > today['rolling_high_20']:
             final_score += 15  
-            if today['consolidation_range'] < 0.12: final_score += 20  
-            elif today['consolidation_range'] > 0.30: final_score -= 15 
+            if pd.notna(today['consolidation_range']):
+                if today['consolidation_range'] < 0.12: final_score += 20  
+                elif today['consolidation_range'] > 0.30: final_score -= 15 
 
         vol_ratio = today['vol'] / yesterday['Vol_MA20'] if yesterday['Vol_MA20'] > 0 else 1
         if 1.5 <= vol_ratio <= 4.0 and today['close'] > today['open']: final_score += 15  
         elif vol_ratio > 5.0: final_score -= 15  
         elif vol_ratio < 0.6 and today['close'] < today['open']: final_score -= 10  
 
-        if today['MACD_hist'] > yesterday['MACD_hist'] and today['MACD_hist'] > 0: final_score += 10  
+        if pd.notna(today['MACD_hist']) and pd.notna(yesterday['MACD_hist']):
+            if today['MACD_hist'] > yesterday['MACD_hist'] and today['MACD_hist'] > 0: 
+                final_score += 10  
+                
         bias_val = today['BIAS20']
-        if bias_val > 0.15: final_score -= 20  
-        elif -0.02 <= bias_val <= 0.08: final_score += 10  
+        if pd.notna(bias_val):
+            if bias_val > 0.15: final_score -= 20  
+            elif -0.02 <= bias_val <= 0.08: final_score += 10  
 
-        if today['shadow_ratio'] > 2.0 and today['upper_shadow'] > today['close'] * 0.02:
+        if pd.notna(today['shadow_ratio']) and today['shadow_ratio'] > 2.0 and today['upper_shadow'] > today['close'] * 0.02:
             final_score -= 40  
 
         latest_price = today['close']
         pct_change = today['pct_change']
-        turnover = today.get('换手率', 0.0) 
+        turnover = today['turnover'] 
         industry = "自选标的" 
 
         if final_score >= 100: signal_text = "🔥 龙头上车-绝佳突破口"
@@ -188,17 +191,18 @@ def process_single_stock(code):
             "动能得分": round(final_score, 1), "行动策略": signal_text,
             "最新价": round(latest_price, 2), "今日涨幅": f"{pct_change}%",
             "换手率": f"{turnover}%", "今日量比": round(vol_ratio, 2),
-            "近20日涨停": int(today['recent_limit_up']), "20日乖离率": f"{bias_val*100:.2f}%"
+            "近20日涨停": int(today['recent_limit_up']) if pd.notna(today['recent_limit_up']) else 0, 
+            "20日乖离率": f"{bias_val*100:.2f}%" if pd.notna(bias_val) else "0.00%"
         }
     except Exception as e:
         return None
 
 # ==========================================
-# 🚀 3. 多线程并发扫描 (火力全开模式)
+# 🚀 3. 多线程并发扫描 (云端安全护航模式)
 # ==========================================
 results = []
-# 🛡️ 核心强化 3：本地运行解禁，并发从 3 提升至 12，速度提升近 4 倍
-MAX_WORKERS = 12  
+# 🛡️ 核心强化：由于 GitHub 节点 IP 固定，并发太高易被东财拉黑。此处调回安全的 4 线程。
+MAX_WORKERS = 4  
 print(f"⚡ 正在分配火力，开启 {MAX_WORKERS} 个并发线程执行标的狙击...")
 
 with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
@@ -231,7 +235,7 @@ if len(results) > 0:
     df_output.sort_values(by=["动能得分"], ascending=[False], inplace=True)
     top10 = df_output.head(10)
     
-    summary_text += "🎯 【V3.0 Pro 自选池起爆点 Top 10】\n"
+    summary_text += "🎯 【V3.1 Pro 自选池起爆点 Top 10】\n"
     summary_text += "-" * 45 + "\n"
     for idx, row in top10.iterrows():
         gene_str = "🔥有涨停基因" if row['近20日涨停'] > 0 else "无涨停基因"
@@ -250,11 +254,9 @@ def send_excel_via_email(file_path, email_body_summary):
     sender = os.getenv("EMAIL_SENDER")
     password = os.getenv("EMAIL_PASSWORD") 
     receiver = os.getenv("EMAIL_RECEIVER")
-    smtp_server = os.getenv("SMTP_SERVER", "smtp.qq.com")
-    smtp_port = int(os.getenv("SMTP_PORT", 465))
     
     if not all([sender, password, receiver]):
-        print("⚠️ GitHub Secrets 未完全配置，跳过邮件发送。日志已在控制台输出。")
+        print("⚠️ 提醒：未检测到完整的邮件环境变量，跳过邮件发送。")
         return
 
     msg = MIMEMultipart()
@@ -268,7 +270,7 @@ def send_excel_via_email(file_path, email_body_summary):
     else:
         msg['Subject'] = f"🚨 警报：大盘破位！自选池防御报告 ({date_str})"
     
-    body = f"主人您好，今日基于您的股票池生成的《V3.0 Pro 动能突破名单》已生成。\n\n{email_body_summary}\n—— 自动量化机器人 敬上\n"
+    body = f"主人您好，今日基于您的股票池生成的《V3.1 Pro 动能突破名单》已生成。\n\n{email_body_summary}\n—— 云端自动量化大脑 敬上\n"
     msg.attach(MIMEText(body, 'plain', 'utf-8'))
     
     if os.path.exists(file_path):
@@ -281,7 +283,7 @@ def send_excel_via_email(file_path, email_body_summary):
             pass
         
     try:
-        server = smtplib.SMTP_SSL(smtp_server, smtp_port)
+        server = smtplib.SMTP_SSL("smtp.qq.com", 465)
         server.login(sender, password)
         server.send_message(msg)
         server.quit()
