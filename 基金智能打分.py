@@ -15,18 +15,18 @@ import warnings
 
 warnings.filterwarnings('ignore')
 
-print("🚀 启动全维量化大脑 v9.0 (云端自动化部署版)...")
+print("🚀 启动全维量化大脑 v9.0 (云端自动化部署 + Top10摘要版)...")
 
 # =========================
 # 全局参数与系统配置
 # =========================
 HEADERS = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
-MAX_WORKERS = 15  # 并发线程数，控制在15-20避免触发反爬策略
+MAX_WORKERS = 15  
 RISK_FREE = 0.02
-MIN_TRADING_DAYS = 120 # 剔除成立不足半年的次新基
+MIN_TRADING_DAYS = 120 
 
 # 宏观基准与行业风向标 ETF 配置
-BENCHMARK_CODE = "510300"  # 沪深300 ETF
+BENCHMARK_CODE = "510300"  
 SECTOR_ETFS = {
     "半导体": "512760",
     "新能源": "516160",
@@ -38,7 +38,6 @@ SECTOR_ETFS = {
     "红利": "510880"
 }
 
-# 基金名称文本映射 (用于给持仓基金归类)
 SECTOR_KEYWORDS = {
     "半导体": ["芯片", "半导体"],
     "新能源": ["新能源", "光伏", "锂电"],
@@ -60,7 +59,6 @@ def get_sector_by_name(name):
 # 核心数据拉取与清洗
 # =========================
 def fetch_and_clean_data(code, retries=3):
-    """拉取数据并使用累计复权净值重构核心技术指标"""
     code = str(code).zfill(6)
     url = f"http://fund.eastmoney.com/pingzhongdata/{code}.js"
     
@@ -72,7 +70,6 @@ def fetch_and_clean_data(code, retries=3):
             name_match = re.search(r'var fS_name = "(.*?)";', text)
             if not name_match: return None
             name = name_match.group(1)
-            # 过滤不需要的基金类型
             if any(x in name for x in ["货币", "纯债", "理财"]): return None
 
             trend_match = re.search(r'var Data_netWorthTrend = (\[.*?\]);', text)
@@ -85,24 +82,21 @@ def fetch_and_clean_data(code, retries=3):
             df["close_raw"] = df["y"].astype(float)
             df["ret"] = df["equityReturn"].fillna(0).astype(float) / 100.0
             
-            # 🛡️ 核心修复：基于每日收益率连乘，计算真实的“累计复权净值”
-            # 确保 BIAS 与均线演算不受基金现金分红或折算的影响
+            # 🛡️ 基于每日收益率连乘，还原真实的“累计复权净值”
             df["cum_growth"] = (1 + df["ret"]).cumprod()
             factor = df.iloc[-1]["close_raw"] / df.iloc[-1]["cum_growth"] if df.iloc[-1]["cum_growth"] != 0 else 1
             df["close_adj"] = df["cum_growth"] * factor
 
-            # 基于复权净值计算技术指标
             df["MA20"] = df["close_adj"].rolling(20).mean()
             df["MA60"] = df["close_adj"].rolling(60).mean()
             df["MA120"] = df["close_adj"].rolling(120).mean()
             df["MA200"] = df["close_adj"].rolling(200).mean()
             
-            # 使用累计复权净值推演乖离率
             df["BIAS20"] = (df["close_adj"] - df["MA20"]) / df["MA20"]
 
             return name, df
         except Exception:
-            time.sleep(1) # 遇错冷却重试
+            time.sleep(1) 
             continue
     return None
 
@@ -112,7 +106,6 @@ def fetch_and_clean_data(code, retries=3):
 def analyze_macro_and_sectors():
     print("📡 正在扫描宏观大盘与中观行业状态...")
     
-    # 1. 市场状态识别 (沪深300 MA200 判定牛熊)
     market_state = "震荡"
     hs300_data = fetch_and_clean_data(BENCHMARK_CODE)
     if hs300_data:
@@ -125,7 +118,6 @@ def analyze_macro_and_sectors():
                 market_state = "熊市"
     print(f"📊 宏观气候判定: 【{market_state}】环境")
 
-    # 2. 行业轮动动量扫描 (测算 60 日动量)
     sector_momentums = {}
     for sector, code in SECTOR_ETFS.items():
         data = fetch_and_clean_data(code)
@@ -135,7 +127,6 @@ def analyze_macro_and_sectors():
                 mom60 = df.iloc[-1]["close_adj"] / df.iloc[-60]["close_adj"] - 1
                 sector_momentums[sector] = mom60
                 
-    # 提取动量最强的 TOP 3 行业
     top_sectors = sorted(sector_momentums, key=sector_momentums.get, reverse=True)[:3]
     print(f"🏆 当前动量最强 TOP 3 赛道: {top_sectors}\n")
     
@@ -153,7 +144,6 @@ def process_fund(code, market_state, top_sectors):
     df_1y = df.tail(250)
     latest = df.iloc[-1]
     
-    # 基础风控指标推演
     roll_max = df_1y["close_adj"].cummax()
     max_dd = ((df_1y["close_adj"] - roll_max) / roll_max).min()
     vol = df_1y["ret"].std() * np.sqrt(250)
@@ -161,14 +151,11 @@ def process_fund(code, market_state, top_sectors):
     sharpe = (ret_ann - RISK_FREE) / vol if vol > 0 else 0
     mom60 = latest["close_adj"] / df.iloc[-60]["close_adj"] - 1 if len(df) >= 60 else 0
     
-    # 1年期高低位推演
     max_1y, min_1y = df_1y["close_adj"].max(), df_1y["close_adj"].min()
     pct1 = (latest["close_adj"] - min_1y) / (max_1y - min_1y) if max_1y > min_1y else 1.0
     bias20 = latest["BIAS20"]
 
-    # -------------------------
-    # 策略A：左侧抄底网格引擎 (低估反转)
-    # -------------------------
+    # 策略A：左侧抄底网格引擎
     score_L = 50
     if pct1 < 0.1: score_L += 30
     elif pct1 < 0.2: score_L += 20
@@ -178,15 +165,12 @@ def process_fund(code, market_state, top_sectors):
         if bias20 < -0.08: score_L += 25
         elif bias20 > 0.05: score_L -= 15
         
-    # 宏观干预调节阀
     if market_state == "牛市": score_L -= 10
     elif market_state == "熊市": score_L += 10
 
     sig_L = "☄️ 砸锅卖铁" if score_L >= 85 else "💰 分批建仓" if score_L >= 65 else "⏳ 观望"
 
-    # -------------------------
-    # 策略B：右侧趋势轮动引擎 (动量突破)
-    # -------------------------
+    # 策略B：右侧趋势轮动引擎
     score_R = 50
     if pd.notnull(latest["MA120"]):
         if latest["close_adj"] > latest["MA20"] > latest["MA60"] > latest["MA120"]:
@@ -197,11 +181,9 @@ def process_fund(code, market_state, top_sectors):
     if mom60 > 0.15: score_R += 20
     score_R += max(-10, min(15, sharpe * 10))
     
-    # 行业景气度干预 (命中 TOP3 强势主线加分)
     if sector in top_sectors:
         score_R += 25
         
-    # 宏观干预调节阀
     if market_state == "熊市": 
         score_R -= 30
 
@@ -217,11 +199,12 @@ def process_fund(code, market_state, top_sectors):
     }
 
 # =========================
-# 自动化邮件推送模块 (已升级 Top10 摘要)
+# 自动化邮件推送模块 (包含 Top10 摘要)
 # =========================
 def send_email_with_excel(file_path, df_left, df_right, market_state, top_sectors):
     print("\n📧 正在打包发送投研报表邮件 (包含 Top10 摘要)...")
     
+    # 严格读取在 GitHub Secrets 中配置的环境变量
     sender = os.getenv('EMAIL_SENDER')
     pwd = os.getenv('EMAIL_PASSWORD')
     receiver = os.getenv('EMAIL_RECEIVER')
@@ -240,7 +223,7 @@ def send_email_with_excel(file_path, df_left, df_right, market_state, top_sector
     left_top10 = df_left.head(10)
     right_top10 = df_right.head(10)
 
-    # 构建邮件正文
+    # 构建排版精美的邮件正文
     body = f"自动运行完成，请查收今日的【双引擎】量化评分报表。\n\n"
     body += f"📊 宏观状态: 【{market_state}】\n"
     body += f"🏆 强势赛道 Top 3: {', '.join(top_sectors)}\n\n"
@@ -272,7 +255,7 @@ def send_email_with_excel(file_path, df_left, df_right, market_state, top_sector
         print(f"❌ 附件读取失败: {e}")
         return
 
-    # 发送请求
+    # 尝试发送请求
     try:
         server = smtplib.SMTP_SSL("smtp.qq.com", 465) 
         server.login(sender, pwd)
@@ -281,14 +264,13 @@ def send_email_with_excel(file_path, df_left, df_right, market_state, top_sector
         print("✅ 邮件发送成功！策略报表及摘要已触达。")
     except Exception as e:
         print(f"❌ 邮件发送失败: {e}")
+
 # =========================
 # 系统执行主进程
 # =========================
 if __name__ == "__main__":
-    # 1. 宏观与中观前置雷达探测
     market_state, top_sectors = analyze_macro_and_sectors()
     
-    # 2. 加载目标基金池
     try:
         df_input = pd.read_excel("我的基金池.xlsx", dtype={"基金代码": str})
         fund_list = df_input["基金代码"].dropna().astype(str).str.strip().str.zfill(6).unique().tolist()
@@ -297,7 +279,6 @@ if __name__ == "__main__":
         print("⚠️ 未找到本地 Excel 配置文件，启动默认防御性测试池...")
         fund_list = ['510300', '159915', '512880', '512690', '110011', '005827', '159928', '512760']
 
-    # 3. 高并发多线程演算
     results = []
     with ThreadPoolExecutor(MAX_WORKERS) as executor:
         futures = {executor.submit(process_fund, code, market_state, top_sectors): code for code in fund_list}
@@ -306,7 +287,6 @@ if __name__ == "__main__":
             if res: results.append(res)
             print(f"\r⏳ 矩阵推演进度: {i}/{len(fund_list)}", end="")
 
-    # 4. 数据报表清洗与持久化输出
     if results:
         df_out = pd.DataFrame(results)
         pct_cols = ["1年百分位", "20日乖离率", "60日动量", "最大回撤", "年化波动率"]
@@ -327,10 +307,8 @@ if __name__ == "__main__":
             
         print(f"\n✅ 演算完美收官！底层文件已生成《{output_filename}》。")
         
-        # 5. 触发云端邮件下发协议
-        send_email_with_excel(output_filename)
+        # 触发带 Top10 摘要的邮件系统
+        send_email_with_excel(output_filename, df_left, df_right, market_state, top_sectors)
         
     else:
         print("\n\n❌ 未能萃取到有效信号，请检查上游接口状态或网络配置。")
-
-
