@@ -266,4 +266,40 @@ def send_excel_via_email(file_path, email_body_summary):
     smtp_port = int(os.getenv("SMTP_PORT", 465))
     
     if not all([sender, password, receiver]):
-        print("⚠️ GitHub Secrets 未完全配置，跳过邮件发送。日志已在控制台输出
+        # 🔴 就是这里之前被截断或少复制了引号和括号
+        print("⚠️ GitHub Secrets 未完全配置，跳过邮件发送。日志已在控制台输出。")
+        return
+
+    msg = MIMEMultipart()
+    msg['From'] = sender
+    msg['To'] = receiver
+    
+    date_str = datetime.now().strftime('%Y-%m-%d')
+    
+    if IS_MARKET_GOOD:
+        msg['Subject'] = f"🚀 游资雷达：全市场主升浪突破阵型 ({date_str})"
+    else:
+        msg['Subject'] = f"🚨 警报：大盘破位！全市场防御报告 ({date_str})"
+    
+    body = f"主人您好，今日基于《新浪财经兜底源》扫描全网 5000 只标的，生成的《V6.0 动能突破名单》已生成。\n\n{email_body_summary}\n—— 自动量化机器人 敬上\n"
+    msg.attach(MIMEText(body, 'plain', 'utf-8'))
+    
+    if os.path.exists(file_path):
+        try:
+            with open(file_path, "rb") as f:
+                part = MIMEApplication(f.read(), Name=os.path.basename(file_path))
+            part['Content-Disposition'] = f'attachment; filename="{os.path.basename(file_path)}"'
+            msg.attach(part)
+        except Exception as e:
+            pass
+        
+    try:
+        server = smtplib.SMTP_SSL(smtp_server, smtp_port)
+        server.login(sender, password)
+        server.send_message(msg)
+        server.quit()
+        print("✅ 股票动能邮件发送成功！")
+    except Exception as e:
+        print(f"❌ 邮件发送失败: {e}")
+
+send_excel_via_email(excel_filename, summary_text)
