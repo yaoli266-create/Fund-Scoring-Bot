@@ -1,4 +1,4 @@
-name: 基金智能打分大脑
+name: 股票动能打分大脑
 
 on:
   schedule:
@@ -18,16 +18,16 @@ jobs:
       uses: actions/setup-python@v5
       with:
         python-version: '3.10'
-        # 🔴 提速外挂：开启 pip 缓存，以后运行再也不用傻等依赖下载了！
+        # ⚡ 保持 pip 缓存提速引擎开启
         cache: 'pip'
 
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
-        # 🔴 直连装甲：在这里把 pytdx 装上，支撑底层的 Socket 通信！
+        # ⚡ 确保底层 Socket 通信的 pytdx 已安装
         pip install akshare pandas numpy openpyxl requests pytdx
 
-    - name: 运行量化大脑 (ETF与个股双引擎)
+    - name: 运行量化大脑 (纯粹个股引擎)
       env:
         EMAIL_SENDER: ${{ secrets.EMAIL_SENDER }}
         EMAIL_PASSWORD: ${{ secrets.EMAIL_PASSWORD }}
@@ -35,13 +35,13 @@ jobs:
         SMTP_SERVER: smtp.qq.com
         SMTP_PORT: 465
       run: |
-        python 基金智能打分.py
+        # 🔴 核心剥离：现在这里只运行股票脚本，算力 100% 聚焦
         python 股票动能智能打分.py
 
     - name: 提取云端运算结果包
       uses: actions/upload-artifact@v4
       with:
-        name: 今日量化综合复盘包
-        # 用星号通吃，一键打包基金和股票生成的所有 Excel 表格
+        # 🎯 专属重命名：生成的云端下载包名称更加精准
+        name: A股主升浪动能复盘包
         path: "*.xlsx"
         retention-days: 7
