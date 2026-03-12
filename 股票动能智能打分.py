@@ -14,20 +14,31 @@ import random
 
 warnings.filterwarnings('ignore')
 
-print("🚀 启动全维量化大脑 V3.0 Pro (主升浪起爆点 + 智能防守防线)...")
+print("🚀 启动全维量化大脑 V3.0 Pro (本地极速版 + 自适应防封锁装甲)...")
 
 # ==========================================
-# 🛡️ 核心强化：智能重试引擎 (防超时与限流)
+# 🛡️ 核心强化 1：自适应指数退避重试引擎
 # ==========================================
-def robust_akshare_call(func, *args, max_retries=3, **kwargs):
+def robust_akshare_call(func, *args, max_retries=5, **kwargs):
+    """
+    不仅捕获网络崩溃，还能精准识别东方财富返回的“幽灵空数据”并触发重试。
+    采用指数级退避算法 (Exponential Backoff)，越失败等得越久，保护本地 IP。
+    """
     for attempt in range(max_retries):
         try:
-            return func(*args, **kwargs)
+            res = func(*args, **kwargs)
+            # 核心防御：识别接口返回的空数据（假成功，真限流）
+            if res is None or (isinstance(res, pd.DataFrame) and res.empty):
+                raise ValueError("⚠️ 接口返回空数据，疑似触发反爬限流阈值")
+            return res
         except Exception as e:
             if attempt < max_retries - 1:
-                sleep_time = (2 ** attempt) + random.uniform(0.5, 1.5)
+                # 指数退避：重试间隔为 1.5s, 3.25s, 6.6s... 迅速降温
+                sleep_time = (1.5 ** (attempt + 1)) + random.uniform(0.1, 0.5)
+                # print(f"  [引擎降温] 触发限流，{sleep_time:.1f}秒后发起第 {attempt+2} 次突围...")
                 time.sleep(sleep_time)
             else:
+                print(f"❌ 接口彻底熔断: {e}")
                 raise e
 
 # ==========================================
@@ -52,36 +63,35 @@ def check_market_environment():
 IS_MARKET_GOOD, SH_CLOSE, SH_MA20 = check_market_environment()
 
 # ==========================================
-# 🔍 1. 实时粗筛：锁定高换手中小盘活跃股
+# 🔍 1. 构建轻量化名称字典 & 读取本地股票池
 # ==========================================
-def get_active_stock_pool(top_n=500):
-    print(f"正在扫描全市场，执行基本面与流动性双重过滤...")
-    try:
-        spot_df = robust_akshare_call(ak.stock_zh_a_spot_em)
-        spot_df = spot_df[~spot_df['名称'].str.contains('ST|退|C|N')]
-        spot_df = spot_df[(spot_df['涨跌幅'] < 9.8) & (spot_df['涨跌幅'] > -9.8)]
-        spot_df = spot_df[spot_df['换手率'] >= 3.0]
-        spot_df = spot_df[spot_df['流通市值'] <= 50000000000]
-        
-        active_pool = spot_df.sort_values(by='成交额', ascending=False).head(top_n)
-        stock_list = active_pool['代码'].tolist()
-        name_dict = dict(zip(active_pool['代码'], active_pool['名称']))
-        spot_info_dict = active_pool.set_index('代码').to_dict('index')
-        
-        print(f"✅ 成功锁定 {len(stock_list)} 只 [高换手+中小盘] 标的，开启游资级量价诊断...")
-        return stock_list, name_dict, spot_info_dict
-    except Exception as e:
-        print(f"⚠️ 粗筛网络彻底瘫痪: {e}")
-        fallback_list = ['600519', '000858']
-        return fallback_list, {c: c for c in fallback_list}, {}
+print("正在拉取A股基础名称字典 (轻量级请求)...")
+try:
+    name_df = robust_akshare_call(ak.stock_info_a_code_name)
+    name_dict = dict(zip(name_df['code'], name_df['name']))
+except Exception:
+    name_dict = {}
 
-stock_list, name_dict, spot_info_dict = get_active_stock_pool(top_n=500)
+def get_custom_stock_pool():
+    print("正在读取自定义股票池...")
+    try:
+        df_input = pd.read_excel('我的股票池.xlsx', dtype={'股票代码': str})
+        stock_list = df_input['股票代码'].dropna().str.strip().tolist()
+        print(f"✅ 成功读取 {len(stock_list)} 只目标股票！准备开启量价诊断...")
+        return stock_list
+    except Exception as e:
+        print(f"⚠️ 未找到 '我的股票池.xlsx'，进入核心兜底票池模式...")
+        fallback_list = ['600519', '000858', '002594', '300750', '300059', '600030', '000333', '601318', '000001', '600036']
+        return fallback_list
+
+stock_list = get_custom_stock_pool()
 
 # ==========================================
 # ⚡️ 2. 核心算力：V3.0 Pro 游资主升浪打分引擎
 # ==========================================
 def process_single_stock(code):
-    time.sleep(random.uniform(0.5, 1.5)) # 🔴 强制休眠伪装人类
+    # 🛡️ 核心强化 2：移除长休眠，改为毫秒级微小抖动，防止并发瞬间撕裂接口
+    time.sleep(random.uniform(0.05, 0.15)) 
     
     code = str(code).zfill(6)
     end_date = datetime.now()
@@ -163,11 +173,10 @@ def process_single_stock(code):
         if today['shadow_ratio'] > 2.0 and today['upper_shadow'] > today['close'] * 0.02:
             final_score -= 40  
 
-        spot_info = spot_info_dict.get(code, {})
-        latest_price = spot_info.get('最新价', today['close'])
-        pct_change = spot_info.get('涨跌幅', 0.0)
-        industry = spot_info.get('所属行业', '未知')
-        turnover = spot_info.get('换手率', 0.0)
+        latest_price = today['close']
+        pct_change = today['pct_change']
+        turnover = today.get('换手率', 0.0) 
+        industry = "自选标的" 
 
         if final_score >= 100: signal_text = "🔥 龙头上车-绝佳突破口"
         elif final_score >= 80: signal_text = "📈 强势共振-低吸待涨"
@@ -185,19 +194,22 @@ def process_single_stock(code):
         return None
 
 # ==========================================
-# 🚀 3. 多线程并发扫描 (降维防脱网)
+# 🚀 3. 多线程并发扫描 (火力全开模式)
 # ==========================================
 results = []
-MAX_WORKERS = 3  # 🔴 控制在3线程并发，以时间换空间
-print(f"⚡ 正在分配火力，开启 {MAX_WORKERS} 个并发线程...")
+# 🛡️ 核心强化 3：本地运行解禁，并发从 3 提升至 12，速度提升近 4 倍
+MAX_WORKERS = 12  
+print(f"⚡ 正在分配火力，开启 {MAX_WORKERS} 个并发线程执行标的狙击...")
 
 with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
     future_to_fund = {executor.submit(process_single_stock, code): code for code in stock_list}
     for future in as_completed(future_to_fund):
+        stock_code = future_to_fund[future]
         try:
             data = future.result()
-            if data and data['动能得分'] >= 70: 
+            if data and data['动能得分'] >= 60: 
                 results.append(data)
+                print(f"✅ 捕获异动: {stock_code} ({data['名称']}) | 动能: {data['动能得分']}")
         except Exception:
             pass
 
@@ -205,7 +217,7 @@ with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
 # 4. 结果汇总、板块共振统计与邮件推送
 # ==========================================
 summary_text = ""
-excel_filename = "A股主升浪动能突破名单.xlsx"
+excel_filename = "A股自选池动能突破名单.xlsx"
 
 if IS_MARKET_GOOD:
     market_alert = f"🟢 【大盘环境安全】上证指数 ({SH_CLOSE:.2f}) 稳居20日线上方，情绪处于进攻期。\n"
@@ -216,30 +228,23 @@ summary_text += market_alert + "=" * 45 + "\n"
 
 if len(results) > 0:
     df_output = pd.DataFrame(results)
-    sector_counts = df_output['所属板块'].value_counts()
-    hot_sectors = sector_counts[sector_counts >= 2].index.tolist()
-    
-    if hot_sectors:
-        summary_text += f"🌪️ 【系统侦测主线板块】：{', '.join(hot_sectors)}\n"
-        summary_text += "(*优先买入属于这些板块的标的，享受题材共振溢价*)\n"
-        summary_text += "=" * 45 + "\n"
-    
-    df_output.sort_values(by=["所属板块", "动能得分"], ascending=[True, False], inplace=True)
+    df_output.sort_values(by=["动能得分"], ascending=[False], inplace=True)
     top10 = df_output.head(10)
-    summary_text += "🎯 【V3.0 Pro 游资起爆点 Top 10】\n"
+    
+    summary_text += "🎯 【V3.0 Pro 自选池起爆点 Top 10】\n"
     summary_text += "-" * 45 + "\n"
     for idx, row in top10.iterrows():
         gene_str = "🔥有涨停基因" if row['近20日涨停'] > 0 else "无涨停基因"
-        summary_text += f"▪️ {row['名称']} ({row['代码']}) - 【{row['所属板块']}】\n"
+        summary_text += f"▪️ {row['名称']} ({row['代码']})\n"
         summary_text += f"   得分: {row['动能得分']} | {gene_str} | 状态: {row['行动策略']}\n"
         summary_text += f"   真实量比: {row['今日量比']}倍 | 偏离度: {row['20日乖离率']} | 换手率: {row['换手率']}\n"
         summary_text += "-" * 45 + "\n"
     
-    df_output.to_excel(excel_filename, index=False, sheet_name='主升浪猎手')
-    print(f"\n🎉 演算完毕！共捕获 {len(df_output)} 只起爆标的。")
+    df_output.to_excel(excel_filename, index=False, sheet_name='自选股猎手')
+    print(f"\n🎉 演算完毕！自选池中共捕获 {len(df_output)} 只强势标的。")
 else:
-    print("\n⚠️ 今日无符合强势动能特征的标的。")
-    summary_text += "📉 今日打分系统【交白卷】！没有股票通过严苛审核，请持币观望。\n"
+    print("\n⚠️ 今日自选池内无符合强势动能特征的标的。")
+    summary_text += "📉 今日打分系统【交白卷】！您的自选池内没有股票通过严苛的动能审核，建议持币观望。\n"
 
 def send_excel_via_email(file_path, email_body_summary):
     sender = os.getenv("EMAIL_SENDER")
@@ -257,9 +262,13 @@ def send_excel_via_email(file_path, email_body_summary):
     msg['To'] = receiver
     
     date_str = datetime.now().strftime('%Y-%m-%d')
-    msg['Subject'] = f"🚀 游资雷达：A股主升浪突破阵型 ({date_str})" if IS_MARKET_GOOD else f"🚨 警报：大盘破位！防御报告 ({date_str})"
     
-    body = f"主人您好，今日的《V3.0 Pro 主升浪猎杀名单》已生成。\n\n{email_body_summary}\n—— 自动量化机器人 敬上\n"
+    if IS_MARKET_GOOD:
+        msg['Subject'] = f"🚀 游资雷达：自选池主升浪突破阵型 ({date_str})"
+    else:
+        msg['Subject'] = f"🚨 警报：大盘破位！自选池防御报告 ({date_str})"
+    
+    body = f"主人您好，今日基于您的股票池生成的《V3.0 Pro 动能突破名单》已生成。\n\n{email_body_summary}\n—— 自动量化机器人 敬上\n"
     msg.attach(MIMEText(body, 'plain', 'utf-8'))
     
     if os.path.exists(file_path):
