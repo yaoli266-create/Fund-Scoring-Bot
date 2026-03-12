@@ -3,7 +3,7 @@ name: 量化大脑自动巡检 (v9.0)
 on:
   schedule:
     # 设定在 UTC 时间 23:00 运行（对应东八区早上 07:00）
-    - cron: '0 23 * * 1-5'
+    - cron: '18 18 * * 1-5'
   
   # 开启手动触发开关
   workflow_dispatch: 
