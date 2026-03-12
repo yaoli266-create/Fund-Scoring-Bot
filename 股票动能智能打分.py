@@ -77,17 +77,34 @@ def get_pytdx_active_pool(top_n=250):
             elif c.startswith('0') or c.startswith('3'):
                 market_codes.append((0, c))
 
-        # 3. 建立物理直连 (提供多个高可用节点防断)
-        api = TdxHq_API(raise_exception=True)
-        nodes = [('119.147.212.81', 7709), ('119.147.86.171', 7709), ('114.115.234.36', 7709)]
+        # 3. 建立物理直连 (海量节点池 + 随机轮询 + 极速超时抛弃)
+        api = TdxHq_API(raise_exception=False) # 关闭全局报错，允许悄悄重试
+        
+        # 扩充到 12 个国内一线大厂/券商的骨干节点
+        nodes = [
+            ('119.147.212.81', 7709), ('119.147.86.171', 7709), 
+            ('114.115.234.36', 7709), ('111.12.55.94', 7709),
+            ('114.80.63.12', 7709),   ('106.14.95.149', 7709),
+            ('119.147.164.60', 7709), ('124.74.236.94', 7709),
+            ('218.108.47.69', 7709),  ('218.71.118.105', 7709),
+            ('180.153.39.51', 7709),  ('121.14.110.210', 7709)
+        ]
+        # 每次运行随机打乱顺序，避免被同一个死节点卡住
+        random.shuffle(nodes) 
+        
         connected = False
         for ip, port in nodes:
-            if api.connect(ip, port):
-                print(f"✅ 成功直连底层行情服务器: {ip}")
-                connected = True
-                break
+            try:
+                # time_out=2秒，连不上立刻换下一个，绝不拖泥带水
+                if api.connect(ip, port, time_out=2):
+                    print(f"✅ 成功穿透防火墙，直连底层服务器: {ip}")
+                    connected = True
+                    break
+            except Exception:
+                pass # 连不上就静默跳过，试下一个
+                
         if not connected:
-            raise ValueError("所有通达信节点连接失败")
+            raise ValueError("所有通达信节点连接超时，海外 IP 可能被全面阻断")
 
         # 4. 暴力并发拉取全市场盘口快照
         quotes_list = []
@@ -332,3 +349,4 @@ def send_excel_via_email(file_path, email_body_summary):
         print(f"❌ 邮件发送失败: {e}")
 
 send_excel_via_email(excel_filename, summary_text)
+
