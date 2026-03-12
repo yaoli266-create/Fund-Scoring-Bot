@@ -12,9 +12,12 @@ import warnings
 import time
 import random
 
+# 🔴 引入硬核直连引擎
+from pytdx.hq import TdxHq_API
+
 warnings.filterwarnings('ignore')
 
-print("🚀 启动全维量化大脑 V4.0 (全市场漏斗降维 + 游资主升浪引擎)...")
+print("🚀 启动全维量化大脑 V5.0 (PyTdx Socket 直连防封锁 + 游资漏斗引擎)...")
 
 # ==========================================
 # 🛡️ 核心强化 1：自适应指数退避重试引擎
@@ -24,7 +27,7 @@ def robust_akshare_call(func, *args, max_retries=5, **kwargs):
         try:
             res = func(*args, **kwargs)
             if res is None or (isinstance(res, pd.DataFrame) and res.empty):
-                raise ValueError("⚠️ 接口返回空数据，疑似触发反爬限流")
+                raise ValueError("⚠️ 接口返回空数据，触发重试")
             return res
         except Exception as e:
             if attempt < max_retries - 1:
@@ -55,46 +58,79 @@ def check_market_environment():
 IS_MARKET_GOOD, SH_CLOSE, SH_MA20 = check_market_environment()
 
 # ==========================================
-# 🌪️ 1. 核心大漏斗：一键获取全市场 5000+ 标的并进行内存降维
+# 🌪️ 1. PyTdx 底层直连大漏斗：无视 HTTP 封锁
 # ==========================================
-def get_active_stock_pool(top_n=250):
-    print("正在获取全市场 5000+ 只股票实时快照，执行漏斗降维...")
+def get_pytdx_active_pool(top_n=250):
+    print("正在通过 TCP Socket 直连券商底层节点，绕过 GitHub 防火墙限制...")
     try:
-        # 仅消耗 1 次 API 请求，获取全市场盘口
-        spot_df = robust_akshare_call(ak.stock_zh_a_spot_em)
-        
-        # 步骤 A：清洗基础垃圾数据
-        spot_df = spot_df.dropna(subset=['代码', '名称', '最新价', '换手率', '流通市值'])
-        spot_df = spot_df[~spot_df['名称'].str.contains('ST|退|C|N|B')]
-        
-        # 步骤 B：游资活跃度过滤 (剔除死水股和超级大盘股)
-        # 换手率大于 3% 才有资金关注，流通市值小于 500 亿才拉得动
-        spot_df = spot_df[spot_df['换手率'] >= 3.0]
-        spot_df = spot_df[spot_df['流通市值'] <= 50000000000]
-        
-        # 步骤 C：按成交额排序，抽取全市场资金最活跃的 top_n (默认250只)
-        active_pool = spot_df.sort_values(by='成交额', ascending=False).head(top_n)
-        
-        stock_list = active_pool['代码'].tolist()
-        name_dict = dict(zip(active_pool['代码'], active_pool['名称']))
-        # 将当天的行业、换手率直接存入字典，后续无需再单独发请求获取
-        spot_info_dict = active_pool.set_index('代码').to_dict('index')
-        
-        print(f"✅ 漏斗过滤完成！瞬间从 5000 只标的浓缩至 {len(stock_list)} 只高频活跃游资票。")
-        return stock_list, name_dict, spot_info_dict
-    except Exception as e:
-        print(f"⚠️ 全市场漏斗构建彻底瘫痪: {e}")
-        fallback_list = ['600519', '000858', '300750']
-        return fallback_list, {c: c for c in fallback_list}, {}
+        # 1. 轻量级获取 A股所有代码和名称
+        name_df = robust_akshare_call(ak.stock_info_a_code_name)
+        name_df = name_df[~name_df['name'].str.contains('ST|退|C|N|B')]
+        codes = name_df['code'].tolist()
+        name_dict = dict(zip(name_df['code'], name_df['name']))
 
-# 启动漏斗，获取活水池
-stock_list, name_dict, spot_info_dict = get_active_stock_pool(top_n=250)
+        # 2. 区分沪深市场 (0:深圳, 1:上海) 适配 pytdx 协议
+        market_codes = []
+        for c in codes:
+            if c.startswith('6'):
+                market_codes.append((1, c))
+            elif c.startswith('0') or c.startswith('3'):
+                market_codes.append((0, c))
+
+        # 3. 建立物理直连 (提供多个高可用节点防断)
+        api = TdxHq_API(raise_exception=True)
+        nodes = [('119.147.212.81', 7709), ('119.147.86.171', 7709), ('114.115.234.36', 7709)]
+        connected = False
+        for ip, port in nodes:
+            if api.connect(ip, port):
+                print(f"✅ 成功直连底层行情服务器: {ip}")
+                connected = True
+                break
+        if not connected:
+            raise ValueError("所有通达信节点连接失败")
+
+        # 4. 暴力并发拉取全市场盘口快照
+        quotes_list = []
+        batch_size = 80 # pytdx 单次最大并发限制
+        for i in range(0, len(market_codes), batch_size):
+            batch = market_codes[i:i+batch_size]
+            data = api.get_security_quotes(batch)
+            if data:
+                quotes_list.extend(data)
+        api.disconnect()
+
+        # 5. 内存降维过滤
+        df_quotes = pd.DataFrame(quotes_list)
+        df_quotes = df_quotes[df_quotes['price'] > 0] # 过滤停牌
+        df_quotes['涨跌幅'] = (df_quotes['price'] - df_quotes['last_close']) / df_quotes['last_close'] * 100
+        
+        # 核心过滤：直接按成交额排兵布阵，选取全市场火力最猛的资金聚集地
+        active_pool = df_quotes.sort_values(by='amount', ascending=False).head(top_n)
+        stock_list = active_pool['code'].tolist()
+
+        spot_info_dict = {}
+        for _, row in active_pool.iterrows():
+            spot_info_dict[row['code']] = {
+                '最新价': row['price'],
+                '涨跌幅': row['涨跌幅']
+            }
+
+        print(f"⚡ Socket 全网扫描完毕！瞬间浓缩出 {len(stock_list)} 只高频游资标的。")
+        return stock_list, name_dict, spot_info_dict
+
+    except Exception as e:
+        print(f"⚠️ PyTdx 漏斗构建失败: {e}")
+        fallback = ['600519', '000858', '300750']
+        return fallback, {c: c for c in fallback}, {}
+
+# 启动直连漏斗
+stock_list, name_dict, spot_info_dict = get_pytdx_active_pool(top_n=250)
 
 # ==========================================
-# ⚡️ 2. 核心算力：V4.0 主升浪打分引擎 (仅对活水池精算)
+# ⚡️ 2. 核心算力：V5.0 主升浪打分引擎 (精算阶段)
 # ==========================================
 def process_single_stock(code):
-    # 🔴 GitHub 专属阻尼：0.2 到 0.6 秒的微小伪装，防止海外节点被封
+    # 🔴 GitHub 专属阻尼：微小伪装，保护 K 线获取不被封
     time.sleep(random.uniform(0.2, 0.6)) 
     
     code = str(code).zfill(6)
@@ -102,6 +138,7 @@ def process_single_stock(code):
     start_date = end_date - timedelta(days=200) 
     
     try:
+        # 历史 K 线依然使用 Akshare 获取复权数据 (此时请求量已大幅降低，极其安全)
         df_k = robust_akshare_call(
             ak.stock_zh_a_hist, symbol=code, period="daily", 
             start_date=start_date.strftime("%Y%m%d"), 
@@ -176,12 +213,12 @@ def process_single_stock(code):
         if today['shadow_ratio'] > 2.0 and today['upper_shadow'] > today['close'] * 0.02:
             final_score -= 40  
 
-        # ✅ 直接从第一步漏斗传进来的字典里读取板块和换手率，无需再次请求 API
+        # 完美拼接：利用 hist 数据中的换手率，补足 Pytdx 的短板
         spot_info = spot_info_dict.get(code, {})
         latest_price = today['close']
         pct_change = today['pct_change']
-        turnover = spot_info.get('换手率', today.get('换手率', 0.0))
-        industry = spot_info.get('所属行业', '主线板块')
+        turnover = today.get('换手率', 0.0)
+        industry = "活跃量能标的"
 
         if final_score >= 100: signal_text = "🔥 龙头上车-绝佳突破口"
         elif final_score >= 80: signal_text = "📈 强势共振-低吸待涨"
@@ -199,10 +236,10 @@ def process_single_stock(code):
         return None
 
 # ==========================================
-# 🚀 3. 多线程并发扫描 (GitHub 黄金并发点)
+# 🚀 3. 多线程并发扫描 (GitHub 黄金护航版)
 # ==========================================
 results = []
-# 🔴 核心参数：6 线程是对海外 IP 最安全的并发量，既能提速又不会触发大面积熔断
+# 🔴 核心参数：6 线程是对海外 IP 最安全的并发量，防止封锁
 MAX_WORKERS = 6  
 print(f"⚡ 正在分配火力，开启 {MAX_WORKERS} 个并发线程执行标的狙击...")
 
@@ -233,22 +270,14 @@ summary_text += market_alert + "=" * 45 + "\n"
 
 if len(results) > 0:
     df_output = pd.DataFrame(results)
-    
-    # 新增：侦测市场当前最热的板块
-    sector_counts = df_output['所属板块'].value_counts()
-    hot_sectors = sector_counts[sector_counts >= 3].index.tolist()
-    if hot_sectors:
-        summary_text += f"🌪️ 【漏斗侦测今日主线板块】：{', '.join(hot_sectors[:5])}\n"
-        summary_text += "=" * 45 + "\n"
-
     df_output.sort_values(by=["动能得分"], ascending=[False], inplace=True)
     top10 = df_output.head(10)
     
-    summary_text += "🎯 【V4.0 全市场漏斗筛选起爆点 Top 10】\n"
+    summary_text += "🎯 【V5.0 Socket 直连拦截起爆点 Top 10】\n"
     summary_text += "-" * 45 + "\n"
     for idx, row in top10.iterrows():
         gene_str = "🔥有涨停基因" if row['近20日涨停'] > 0 else "无涨停基因"
-        summary_text += f"▪️ {row['名称']} ({row['代码']}) - 【{row['所属板块']}】\n"
+        summary_text += f"▪️ {row['名称']} ({row['代码']})\n"
         summary_text += f"   得分: {row['动能得分']} | {gene_str} | 状态: {row['行动策略']}\n"
         summary_text += f"   真实量比: {row['今日量比']}倍 | 偏离度: {row['20日乖离率']} | 换手率: {row['换手率']}\n"
         summary_text += "-" * 45 + "\n"
@@ -281,7 +310,7 @@ def send_excel_via_email(file_path, email_body_summary):
     else:
         msg['Subject'] = f"🚨 警报：大盘破位！全市场防御报告 ({date_str})"
     
-    body = f"主人您好，今日基于《漏斗过滤法》扫描全网 5000 只标的生成的《V4.0 动能突破名单》已生成。\n\n{email_body_summary}\n—— 自动量化机器人 敬上\n"
+    body = f"主人您好，今日基于《TCP Socket 底层直连法》强行破盾扫描全网 5000 只标的，生成的《V5.0 动能突破名单》已生成。\n\n{email_body_summary}\n—— 自动量化机器人 敬上\n"
     msg.attach(MIMEText(body, 'plain', 'utf-8'))
     
     if os.path.exists(file_path):
