@@ -1,0 +1,40 @@
+name: 量化大脑自动巡检 (v9.0)
+
+on:
+  schedule:
+    # 设定在 UTC 时间 23:00 运行（对应东八区早上 07:00）。
+    # 这个时间点运行，能够确保 100% 抓取到前一日所有 A 股场外基金最新确权的官方净值，生成完美的“早盘研报”。
+    - cron: '0 23 * * 1-5'
+  
+  # 开启手动触发开关：允许你在 GitHub 网页端 Actions 面板随时点击 "Run workflow" 强制执行测试
+  workflow_dispatch: 
+
+jobs:
+  run-strategy:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: 检出代码仓库
+      uses: actions/checkout@v3
+
+    - name: 配置 Python 环境
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.10'
+        cache: 'pip' # 开启 pip 缓存，大幅提升每次自动运行的启动速度
+
+    - name: 安装量化系统依赖包
+      run: |
+        python -m pip install --upgrade pip
+        # 安装脚本运行必需的核心库
+        pip install requests pandas numpy openpyxl
+
+    - name: 启动全维量化大脑进行矩阵推演
+      env:
+        # 🛡️ 环境变量映射：将你在 GitHub Secrets 中配置的机密信息，安全注入到 Python 运行环境中
+        EMAIL_SENDER: ${{ secrets.EMAIL_SENDER }}
+        EMAIL_PASSWORD: ${{ secrets.EMAIL_PASSWORD }}
+        EMAIL_RECEIVER: ${{ secrets.EMAIL_RECEIVER }}
+      run: |
+        # 确保这里的 Python 文件名与你仓库里的主程序文件名完全一致
+        python 基金智能打分.py
