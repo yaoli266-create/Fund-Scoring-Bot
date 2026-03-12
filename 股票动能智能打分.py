@@ -14,7 +14,7 @@ import random
 
 warnings.filterwarnings('ignore')
 
-print("🚀 启动全维量化大脑 V3.1 Pro (云端自适应防封锁装甲版)...")
+print("🚀 启动全维量化大脑 V4.0 (全市场漏斗降维 + 游资主升浪引擎)...")
 
 # ==========================================
 # 🛡️ 核心强化 1：自适应指数退避重试引擎
@@ -24,14 +24,13 @@ def robust_akshare_call(func, *args, max_retries=5, **kwargs):
         try:
             res = func(*args, **kwargs)
             if res is None or (isinstance(res, pd.DataFrame) and res.empty):
-                raise ValueError("⚠️ 接口返回空数据，疑似触发反爬限流阈值")
+                raise ValueError("⚠️ 接口返回空数据，疑似触发反爬限流")
             return res
         except Exception as e:
             if attempt < max_retries - 1:
                 sleep_time = (1.5 ** (attempt + 1)) + random.uniform(0.1, 0.5)
                 time.sleep(sleep_time)
             else:
-                print(f"❌ 接口彻底熔断: {e}")
                 raise e
 
 # ==========================================
@@ -56,35 +55,47 @@ def check_market_environment():
 IS_MARKET_GOOD, SH_CLOSE, SH_MA20 = check_market_environment()
 
 # ==========================================
-# 🔍 1. 构建轻量化名称字典 & 读取本地股票池
+# 🌪️ 1. 核心大漏斗：一键获取全市场 5000+ 标的并进行内存降维
 # ==========================================
-print("正在拉取A股基础名称字典 (轻量级请求)...")
-try:
-    name_df = robust_akshare_call(ak.stock_info_a_code_name)
-    name_dict = dict(zip(name_df['code'], name_df['name']))
-except Exception:
-    name_dict = {}
-
-def get_custom_stock_pool():
-    print("正在读取自定义股票池...")
+def get_active_stock_pool(top_n=250):
+    print("正在获取全市场 5000+ 只股票实时快照，执行漏斗降维...")
     try:
-        df_input = pd.read_excel('我的股票池.xlsx', dtype={'股票代码': str})
-        stock_list = df_input['股票代码'].dropna().str.strip().tolist()
-        print(f"✅ 成功读取 {len(stock_list)} 只目标股票！准备开启量价诊断...")
-        return stock_list
+        # 仅消耗 1 次 API 请求，获取全市场盘口
+        spot_df = robust_akshare_call(ak.stock_zh_a_spot_em)
+        
+        # 步骤 A：清洗基础垃圾数据
+        spot_df = spot_df.dropna(subset=['代码', '名称', '最新价', '换手率', '流通市值'])
+        spot_df = spot_df[~spot_df['名称'].str.contains('ST|退|C|N|B')]
+        
+        # 步骤 B：游资活跃度过滤 (剔除死水股和超级大盘股)
+        # 换手率大于 3% 才有资金关注，流通市值小于 500 亿才拉得动
+        spot_df = spot_df[spot_df['换手率'] >= 3.0]
+        spot_df = spot_df[spot_df['流通市值'] <= 50000000000]
+        
+        # 步骤 C：按成交额排序，抽取全市场资金最活跃的 top_n (默认250只)
+        active_pool = spot_df.sort_values(by='成交额', ascending=False).head(top_n)
+        
+        stock_list = active_pool['代码'].tolist()
+        name_dict = dict(zip(active_pool['代码'], active_pool['名称']))
+        # 将当天的行业、换手率直接存入字典，后续无需再单独发请求获取
+        spot_info_dict = active_pool.set_index('代码').to_dict('index')
+        
+        print(f"✅ 漏斗过滤完成！瞬间从 5000 只标的浓缩至 {len(stock_list)} 只高频活跃游资票。")
+        return stock_list, name_dict, spot_info_dict
     except Exception as e:
-        print(f"⚠️ 未找到 '我的股票池.xlsx'，进入核心兜底票池模式...")
-        fallback_list = ['600519', '000858', '002594', '300750', '300059', '600030', '000333', '601318', '000001', '600036']
-        return fallback_list
+        print(f"⚠️ 全市场漏斗构建彻底瘫痪: {e}")
+        fallback_list = ['600519', '000858', '300750']
+        return fallback_list, {c: c for c in fallback_list}, {}
 
-stock_list = get_custom_stock_pool()
+# 启动漏斗，获取活水池
+stock_list, name_dict, spot_info_dict = get_active_stock_pool(top_n=250)
 
 # ==========================================
-# ⚡️ 2. 核心算力：V3.1 Pro 游资主升浪打分引擎
+# ⚡️ 2. 核心算力：V4.0 主升浪打分引擎 (仅对活水池精算)
 # ==========================================
 def process_single_stock(code):
-    # 增加微小抖动，防止高频并发撕裂东方财富接口
-    time.sleep(random.uniform(0.1, 0.3)) 
+    # 🔴 GitHub 专属阻尼：0.2 到 0.6 秒的微小伪装，防止海外节点被封
+    time.sleep(random.uniform(0.2, 0.6)) 
     
     code = str(code).zfill(6)
     end_date = datetime.now()
@@ -97,8 +108,7 @@ def process_single_stock(code):
             end_date=end_date.strftime("%Y%m%d"), adjust="qfq"
         )
         
-        if df_k is None or df_k.empty or len(df_k) < 65: 
-            return None 
+        if df_k is None or df_k.empty or len(df_k) < 65: return None 
             
         df_k['date'] = pd.to_datetime(df_k['日期'])
         df_k['close'] = df_k['收盘'].astype(float)
@@ -107,8 +117,6 @@ def process_single_stock(code):
         df_k['low'] = df_k['最低'].astype(float) 
         df_k['vol'] = df_k['成交量'].astype(float)
         df_k['pct_change'] = df_k['涨跌幅'].astype(float)
-        # 🛠️ 修复：精准提取换手率，避免输出全是 0.0%
-        df_k['turnover'] = df_k['换手率'].astype(float) if '换手率' in df_k.columns else 0.0
         
         df_k['MA5'] = df_k['close'].rolling(window=5).mean()
         df_k['MA10'] = df_k['close'].rolling(window=10).mean()
@@ -127,15 +135,13 @@ def process_single_stock(code):
         df_k['recent_limit_up'] = df_k['is_limit_up'].rolling(window=20).sum()
         df_k['rolling_high_20'] = df_k['high'].rolling(window=20).max().shift(1)
 
-        # 🛠️ 修复：防止一字板导致 body_size 为 0 触发报错
         df_k['body_size'] = abs(df_k['close'] - df_k['open'])
         df_k['upper_shadow'] = df_k['high'] - df_k[['close', 'open']].max(axis=1)
-        df_k['shadow_ratio'] = df_k['upper_shadow'] / (df_k['body_size'].replace(0, 0.001))
+        df_k['shadow_ratio'] = df_k['upper_shadow'] / (df_k['body_size'] + 0.001)
 
         df_k['rolling_high_10'] = df_k['high'].rolling(window=10).max().shift(1)
         df_k['rolling_low_10'] = df_k['low'].rolling(window=10).min().shift(1)
-        # 🛠️ 修复：严密防范分母为零与 NaN 蔓延
-        df_k['consolidation_range'] = (df_k['rolling_high_10'] - df_k['rolling_low_10']) / df_k['rolling_low_10'].replace(0, 0.001)
+        df_k['consolidation_range'] = (df_k['rolling_high_10'] - df_k['rolling_low_10']) / df_k['rolling_low_10']
 
         today = df_k.iloc[-1]
         yesterday = df_k.iloc[-2]
@@ -149,37 +155,33 @@ def process_single_stock(code):
         elif today['close'] < today['MA60']: final_score -= 30  
         if today['close'] > today['MA5'] and today['MA5'] > today['MA10'] and today['MA10'] > today['MA20']: final_score += 15  
 
-        # 🛠️ 优化：只奖励龙头，不盲目惩罚大盘蓝筹
-        if pd.notna(today['recent_limit_up']) and today['recent_limit_up'] >= 1: 
-            final_score += 10  
+        if today['recent_limit_up'] >= 1: final_score += 10  
+        else: final_score -= 5   
 
         if today['close'] > today['rolling_high_20']:
             final_score += 15  
-            if pd.notna(today['consolidation_range']):
-                if today['consolidation_range'] < 0.12: final_score += 20  
-                elif today['consolidation_range'] > 0.30: final_score -= 15 
+            if today['consolidation_range'] < 0.12: final_score += 20  
+            elif today['consolidation_range'] > 0.30: final_score -= 15 
 
         vol_ratio = today['vol'] / yesterday['Vol_MA20'] if yesterday['Vol_MA20'] > 0 else 1
         if 1.5 <= vol_ratio <= 4.0 and today['close'] > today['open']: final_score += 15  
         elif vol_ratio > 5.0: final_score -= 15  
         elif vol_ratio < 0.6 and today['close'] < today['open']: final_score -= 10  
 
-        if pd.notna(today['MACD_hist']) and pd.notna(yesterday['MACD_hist']):
-            if today['MACD_hist'] > yesterday['MACD_hist'] and today['MACD_hist'] > 0: 
-                final_score += 10  
-                
+        if today['MACD_hist'] > yesterday['MACD_hist'] and today['MACD_hist'] > 0: final_score += 10  
         bias_val = today['BIAS20']
-        if pd.notna(bias_val):
-            if bias_val > 0.15: final_score -= 20  
-            elif -0.02 <= bias_val <= 0.08: final_score += 10  
+        if bias_val > 0.15: final_score -= 20  
+        elif -0.02 <= bias_val <= 0.08: final_score += 10  
 
-        if pd.notna(today['shadow_ratio']) and today['shadow_ratio'] > 2.0 and today['upper_shadow'] > today['close'] * 0.02:
+        if today['shadow_ratio'] > 2.0 and today['upper_shadow'] > today['close'] * 0.02:
             final_score -= 40  
 
+        # ✅ 直接从第一步漏斗传进来的字典里读取板块和换手率，无需再次请求 API
+        spot_info = spot_info_dict.get(code, {})
         latest_price = today['close']
         pct_change = today['pct_change']
-        turnover = today['turnover'] 
-        industry = "自选标的" 
+        turnover = spot_info.get('换手率', today.get('换手率', 0.0))
+        industry = spot_info.get('所属行业', '主线板块')
 
         if final_score >= 100: signal_text = "🔥 龙头上车-绝佳突破口"
         elif final_score >= 80: signal_text = "📈 强势共振-低吸待涨"
@@ -191,18 +193,17 @@ def process_single_stock(code):
             "动能得分": round(final_score, 1), "行动策略": signal_text,
             "最新价": round(latest_price, 2), "今日涨幅": f"{pct_change}%",
             "换手率": f"{turnover}%", "今日量比": round(vol_ratio, 2),
-            "近20日涨停": int(today['recent_limit_up']) if pd.notna(today['recent_limit_up']) else 0, 
-            "20日乖离率": f"{bias_val*100:.2f}%" if pd.notna(bias_val) else "0.00%"
+            "近20日涨停": int(today['recent_limit_up']), "20日乖离率": f"{bias_val*100:.2f}%"
         }
     except Exception as e:
         return None
 
 # ==========================================
-# 🚀 3. 多线程并发扫描 (云端安全护航模式)
+# 🚀 3. 多线程并发扫描 (GitHub 黄金并发点)
 # ==========================================
 results = []
-# 🛡️ 核心强化：由于 GitHub 节点 IP 固定，并发太高易被东财拉黑。此处调回安全的 4 线程。
-MAX_WORKERS = 4  
+# 🔴 核心参数：6 线程是对海外 IP 最安全的并发量，既能提速又不会触发大面积熔断
+MAX_WORKERS = 6  
 print(f"⚡ 正在分配火力，开启 {MAX_WORKERS} 个并发线程执行标的狙击...")
 
 with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
@@ -221,7 +222,7 @@ with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
 # 4. 结果汇总、板块共振统计与邮件推送
 # ==========================================
 summary_text = ""
-excel_filename = "A股自选池动能突破名单.xlsx"
+excel_filename = "A股全市场主升浪突破名单.xlsx"
 
 if IS_MARKET_GOOD:
     market_alert = f"🟢 【大盘环境安全】上证指数 ({SH_CLOSE:.2f}) 稳居20日线上方，情绪处于进攻期。\n"
@@ -232,31 +233,41 @@ summary_text += market_alert + "=" * 45 + "\n"
 
 if len(results) > 0:
     df_output = pd.DataFrame(results)
+    
+    # 新增：侦测市场当前最热的板块
+    sector_counts = df_output['所属板块'].value_counts()
+    hot_sectors = sector_counts[sector_counts >= 3].index.tolist()
+    if hot_sectors:
+        summary_text += f"🌪️ 【漏斗侦测今日主线板块】：{', '.join(hot_sectors[:5])}\n"
+        summary_text += "=" * 45 + "\n"
+
     df_output.sort_values(by=["动能得分"], ascending=[False], inplace=True)
     top10 = df_output.head(10)
     
-    summary_text += "🎯 【V3.1 Pro 自选池起爆点 Top 10】\n"
+    summary_text += "🎯 【V4.0 全市场漏斗筛选起爆点 Top 10】\n"
     summary_text += "-" * 45 + "\n"
     for idx, row in top10.iterrows():
         gene_str = "🔥有涨停基因" if row['近20日涨停'] > 0 else "无涨停基因"
-        summary_text += f"▪️ {row['名称']} ({row['代码']})\n"
+        summary_text += f"▪️ {row['名称']} ({row['代码']}) - 【{row['所属板块']}】\n"
         summary_text += f"   得分: {row['动能得分']} | {gene_str} | 状态: {row['行动策略']}\n"
         summary_text += f"   真实量比: {row['今日量比']}倍 | 偏离度: {row['20日乖离率']} | 换手率: {row['换手率']}\n"
         summary_text += "-" * 45 + "\n"
     
-    df_output.to_excel(excel_filename, index=False, sheet_name='自选股猎手')
-    print(f"\n🎉 演算完毕！自选池中共捕获 {len(df_output)} 只强势标的。")
+    df_output.to_excel(excel_filename, index=False, sheet_name='全网游资猎手')
+    print(f"\n🎉 演算完毕！全网过滤中共捕获 {len(df_output)} 只强势标的。")
 else:
-    print("\n⚠️ 今日自选池内无符合强势动能特征的标的。")
-    summary_text += "📉 今日打分系统【交白卷】！您的自选池内没有股票通过严苛的动能审核，建议持币观望。\n"
+    print("\n⚠️ 今日全网活水池内无符合强势动能特征的标的。")
+    summary_text += "📉 今日打分系统【交白卷】！严格过滤后无票符合预期，建议持币观望。\n"
 
 def send_excel_via_email(file_path, email_body_summary):
     sender = os.getenv("EMAIL_SENDER")
     password = os.getenv("EMAIL_PASSWORD") 
     receiver = os.getenv("EMAIL_RECEIVER")
+    smtp_server = os.getenv("SMTP_SERVER", "smtp.qq.com")
+    smtp_port = int(os.getenv("SMTP_PORT", 465))
     
     if not all([sender, password, receiver]):
-        print("⚠️ 提醒：未检测到完整的邮件环境变量，跳过邮件发送。")
+        print("⚠️ GitHub Secrets 未完全配置，跳过邮件发送。日志已在控制台输出。")
         return
 
     msg = MIMEMultipart()
@@ -266,11 +277,11 @@ def send_excel_via_email(file_path, email_body_summary):
     date_str = datetime.now().strftime('%Y-%m-%d')
     
     if IS_MARKET_GOOD:
-        msg['Subject'] = f"🚀 游资雷达：自选池主升浪突破阵型 ({date_str})"
+        msg['Subject'] = f"🚀 游资雷达：全市场主升浪突破阵型 ({date_str})"
     else:
-        msg['Subject'] = f"🚨 警报：大盘破位！自选池防御报告 ({date_str})"
+        msg['Subject'] = f"🚨 警报：大盘破位！全市场防御报告 ({date_str})"
     
-    body = f"主人您好，今日基于您的股票池生成的《V3.1 Pro 动能突破名单》已生成。\n\n{email_body_summary}\n—— 云端自动量化大脑 敬上\n"
+    body = f"主人您好，今日基于《漏斗过滤法》扫描全网 5000 只标的生成的《V4.0 动能突破名单》已生成。\n\n{email_body_summary}\n—— 自动量化机器人 敬上\n"
     msg.attach(MIMEText(body, 'plain', 'utf-8'))
     
     if os.path.exists(file_path):
@@ -283,7 +294,7 @@ def send_excel_via_email(file_path, email_body_summary):
             pass
         
     try:
-        server = smtplib.SMTP_SSL("smtp.qq.com", 465)
+        server = smtplib.SMTP_SSL(smtp_server, smtp_port)
         server.login(sender, password)
         server.send_message(msg)
         server.quit()
