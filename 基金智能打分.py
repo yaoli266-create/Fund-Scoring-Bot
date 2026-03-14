@@ -16,7 +16,7 @@ import warnings
 
 warnings.filterwarnings('ignore')
 
-print("🚀 启动全维量化大脑 v10.0 (Z-Score 自适应进化版)...")
+print("🚀 启动全维量化大脑 v11.0 (双擎 Z-Score 终极进化版)...")
 
 # =========================
 # 全局参数与系统配置
@@ -24,7 +24,7 @@ print("🚀 启动全维量化大脑 v10.0 (Z-Score 自适应进化版)...")
 HEADERS = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
 MAX_WORKERS = 10  
 RISK_FREE = 0.02
-MIN_TRADING_DAYS = 252 # 提高最低交易日要求，确保 Z-Score 计算有足量的一年期样本
+MIN_TRADING_DAYS = 252 
 
 # 宏观基准与行业风向标 ETF 配置
 BENCHMARK_CODE = "510300"  
@@ -57,7 +57,7 @@ def get_sector_by_name(name):
     return "宽基/其他"
 
 # =========================
-# 核心数据拉取与清洗 (植入自适应基因)
+# 核心数据拉取与清洗 (植入双维自适应基因)
 # =========================
 def fetch_and_clean_data(code, retries=3):
     code = str(code).zfill(6)
@@ -90,17 +90,23 @@ def fetch_and_clean_data(code, retries=3):
             factor = df.iloc[-1]["close_raw"] / df.iloc[-1]["cum_growth"] if df.iloc[-1]["cum_growth"] != 0 else 1
             df["close_adj"] = df["cum_growth"] * factor
 
-            # 基础技术指标
+            # 基础技术与乖离指标
             df["MA20"] = df["close_adj"].rolling(20).mean()
             df["MA60"] = df["close_adj"].rolling(60).mean()
             df["MA120"] = df["close_adj"].rolling(120).mean()
             df["MA200"] = df["close_adj"].rolling(200).mean()
             df["BIAS20"] = (df["close_adj"] - df["MA20"]) / df["MA20"]
 
-            # 👑 核心引擎进化：计算滚动 252 日波动的 Z-Score
+            # 左侧引擎核心：乖离率 Z-Score (恐慌/贪婪度)
             df["ROLL_BIAS_MEAN"] = df["BIAS20"].rolling(252).mean()
             df["ROLL_BIAS_STD"] = df["BIAS20"].rolling(252).std()
             df["BIAS_ZSCORE"] = (df["BIAS20"] - df["ROLL_BIAS_MEAN"]) / df["ROLL_BIAS_STD"]
+
+            # 右侧引擎核心：动量 Z-Score (相对强势度)
+            df["MOM60"] = df["close_adj"] / df["close_adj"].shift(60) - 1
+            df["ROLL_MOM_MEAN"] = df["MOM60"].rolling(252).mean()
+            df["ROLL_MOM_STD"] = df["MOM60"].rolling(252).std()
+            df["MOM_ZSCORE"] = (df["MOM60"] - df["ROLL_MOM_MEAN"]) / df["ROLL_MOM_STD"]
 
             return name, df
             
@@ -136,12 +142,13 @@ def analyze_macro_and_sectors():
         data = fetch_and_clean_data(code)
         if data:
             _, df = data
-            if len(df) >= 60:
-                mom60 = df.iloc[-1]["close_adj"] / df.iloc[-60]["close_adj"] - 1
-                sector_momentums[sector] = mom60
+            latest = df.iloc[-1]
+            if pd.notnull(latest["MOM_ZSCORE"]):
+                # 使用相对动量进行赛道PK，更显公平
+                sector_momentums[sector] = latest["MOM_ZSCORE"]
                 
     top_sectors = sorted(sector_momentums, key=sector_momentums.get, reverse=True)[:3]
-    print(f"🏆 当前动量最强 TOP 3 赛道: {top_sectors}\n")
+    print(f"🏆 当前标准动量最强 TOP 3 赛道: {top_sectors}\n")
     
     return market_state, top_sectors
 
@@ -162,16 +169,15 @@ def process_fund(code, market_state, top_sectors):
     vol = df_1y["ret"].std() * np.sqrt(250)
     ret_ann = df_1y["ret"].mean() * 250
     sharpe = (ret_ann - RISK_FREE) / vol if vol > 0 else 0
-    mom60 = latest["close_adj"] / df.iloc[-60]["close_adj"] - 1 if len(df) >= 60 else 0
     
     max_1y, min_1y = df_1y["close_adj"].max(), df_1y["close_adj"].min()
     pct1 = (latest["close_adj"] - min_1y) / (max_1y - min_1y) if max_1y > min_1y else 1.0
     
-    # 提取自适应评分关键参数
     bias_zscore = latest["BIAS_ZSCORE"]
+    mom_zscore = latest["MOM_ZSCORE"]
 
     # =========================
-    # 策略A：左侧抄底自适应引擎
+    # 策略A：左侧抄底自适应引擎 (越跌越买)
     # =========================
     score_L = 50
     if pct1 < 0.1: score_L += 30
@@ -179,13 +185,9 @@ def process_fund(code, market_state, top_sectors):
     elif pct1 > 0.8: score_L -= 20
     
     if pd.notnull(bias_zscore):
-        # 使用 Z-Score 取代绝对的 -8% 或 5%
-        if bias_zscore < -2.0: 
-            score_L += 25  # 击穿自身历史极端下轨，给予满额加分
-        elif bias_zscore < -1.5:
-            score_L += 15  # 触及自身历史较度恐慌线
-        elif bias_zscore > 1.5: 
-            score_L -= 15  # 阶段性严重超买，扣分
+        if bias_zscore < -2.0: score_L += 25       # 极度恐慌
+        elif bias_zscore < -1.5: score_L += 15     # 较度恐慌
+        elif bias_zscore > 1.5: score_L -= 15      # 阶段超买
         
     if market_state == "牛市": score_L -= 10
     elif market_state == "熊市": score_L += 10
@@ -193,7 +195,7 @@ def process_fund(code, market_state, top_sectors):
     sig_L = "☄️ 砸锅卖铁" if score_L >= 85 else "💰 分批建仓" if score_L >= 65 else "⏳ 观望"
 
     # =========================
-    # 策略B：右侧趋势轮动引擎
+    # 策略B：右侧趋势自适应引擎 (突破追击)
     # =========================
     score_R = 50
     if pd.notnull(latest["MA120"]):
@@ -202,7 +204,15 @@ def process_fund(code, market_state, top_sectors):
         elif latest["close_adj"] < latest["MA60"] < latest["MA120"]:
             score_R -= 20 
             
-    if mom60 > 0.15: score_R += 20
+    if pd.notnull(mom_zscore):
+        if mom_zscore > 1.5: score_R += 20     # 突破自身强势极值
+        elif mom_zscore > 1.0: score_R += 10   # 走势转强
+        elif mom_zscore < -1.0: score_R -= 15  # 动量溃散
+        
+    # 🛡️ 致命防守：若偏离均线过远(极度贪婪)，剥夺买入资格防接盘
+    if pd.notnull(bias_zscore) and bias_zscore > 2.0:
+        score_R -= 30
+
     score_R += max(-10, min(15, sharpe * 10))
     
     if sector in top_sectors:
@@ -217,8 +227,8 @@ def process_fund(code, market_state, top_sectors):
         "代码": code, "名称": name, "所属赛道": sector,
         "左侧_反转得分": score_L, "左侧_操作建议": sig_L,
         "右侧_动量得分": score_R, "右侧_操作建议": sig_R,
-        "1年百分位": pct1, "恐慌极值度(Z-Score)": bias_zscore, 
-        "60日动量": mom60, "夏普比率": sharpe,
+        "1年百分位": pct1, "极度偏差(Z)": bias_zscore, 
+        "相对动量(Z)": mom_zscore, "夏普比率": sharpe,
         "最大回撤": max_dd, "年化波动率": vol
     }
 
@@ -240,26 +250,26 @@ def send_email_with_excel(file_path, df_left, df_right, market_state, top_sector
     msg['From'] = sender
     msg['To'] = receiver
     today_str = datetime.now().strftime('%Y-%m-%d')
-    msg['Subject'] = f"量化大脑矩阵 v10.0 - {today_str}"
+    msg['Subject'] = f"量化大脑双擎 v11.0 - {today_str}"
 
     left_top10 = df_left.head(10)
     right_top10 = df_right.head(10)
 
-    body = f"自动运行完成，请查收今日的【双引擎】量化评分报表 (自适应版)。\n\n"
-    body += f"📊 宏观状态: 【{market_state}】\n"
-    body += f"🏆 强势赛道 Top 3: {', '.join(top_sectors)}\n\n"
+    body = f"全维量化大脑运行完成，请查收今日【自适应双引擎】投研报表。\n\n"
+    body += f"📊 宏观气候: 【{market_state}】\n"
+    body += f"🏆 标准动量 Top 3 赛道: {', '.join(top_sectors)}\n\n"
 
     body += "====================================\n"
-    body += "🟢 策略A：左侧网格 (恐慌自适应) TOP 10\n"
+    body += "🟢 策略A：左侧网格 (恐慌抄底) TOP 10\n"
     body += "====================================\n"
     for i, (_, row) in enumerate(left_top10.iterrows(), 1):
-        body += f"{i}. {row['代码']} {row['名称']} | 得分: {row['左侧_反转得分']} | 建议: {row['左侧_操作建议']} | 恐慌度: {row['恐慌极值度(Z-Score)']} Sigma\n"
+        body += f"{i}. {row['代码']} {row['名称']} | 得分: {row['左侧_反转得分']} | 建议: {row['左侧_操作建议']} | 恐慌度: {row['极度偏差(Z)']} Sigma\n"
 
     body += "\n====================================\n"
-    body += "🔴 策略B：右侧趋势 (动量轮动) TOP 10\n"
+    body += "🔴 策略B：右侧趋势 (动量突破) TOP 10\n"
     body += "====================================\n"
     for i, (_, row) in enumerate(right_top10.iterrows(), 1):
-        body += f"{i}. {row['代码']} {row['名称']} | 得分: {row['右侧_动量得分']} | 建议: {row['右侧_操作建议']} | 60日动量: {row['60日动量']}%\n"
+        body += f"{i}. {row['代码']} {row['名称']} | 得分: {row['右侧_动量得分']} | 建议: {row['右侧_操作建议']} | 突破度: {row['相对动量(Z)']} Sigma\n"
 
     msg.attach(MIMEText(body, 'plain', 'utf-8'))
 
@@ -277,7 +287,7 @@ def send_email_with_excel(file_path, df_left, df_right, market_state, top_sector
         server.login(sender, pwd)
         server.sendmail(sender, receiver, msg.as_string())
         server.quit()
-        print("✅ 邮件发送成功！策略报表及摘要已触达。")
+        print("✅ 邮件发送成功！策略报表已触达。")
     except Exception as e:
         print(f"❌ 邮件发送失败: {e}")
 
@@ -290,9 +300,9 @@ if __name__ == "__main__":
     try:
         df_input = pd.read_excel("我的基金池.xlsx", dtype={"基金代码": str})
         fund_list = df_input["基金代码"].dropna().astype(str).str.strip().str.zfill(6).unique().tolist()
-        print(f"📥 成功挂载《我的基金池》，共锁定 {len(fund_list)} 只标的，准备多线程并发测试...")
+        print(f"📥 成功挂载《我的基金池》，锁定 {len(fund_list)} 只标的进行多线程演算...")
     except:
-        print("⚠️ 未找到本地 Excel 配置文件，启动默认防御性测试池...")
+        print("⚠️ 未找到本地 Excel，启动防御性测试池...")
         fund_list = ['510300', '159915', '512880', '512690', '110011', '005827', '159928', '512760']
 
     results = []
@@ -305,25 +315,25 @@ if __name__ == "__main__":
 
     if results:
         df_out = pd.DataFrame(results)
-        pct_cols = ["1年百分位", "60日动量", "最大回撤", "年化波动率"]
+        pct_cols = ["1年百分位", "最大回撤", "年化波动率"]
         for col in pct_cols:
             df_out[col] = df_out[col].astype(float) * 100
             
         df_out = df_out.round({"左侧_反转得分": 1, "右侧_动量得分": 1, "夏普比率": 2, 
-                               "1年百分位": 1, "恐慌极值度(Z-Score)": 2, "60日动量": 1, 
+                               "1年百分位": 1, "极度偏差(Z)": 2, "相对动量(Z)": 2, 
                                "最大回撤": 1, "年化波动率": 1})
         
         df_left = df_out.sort_values("左侧_反转得分", ascending=False).drop(columns=["右侧_动量得分", "右侧_操作建议"])
         df_right = df_out.sort_values("右侧_动量得分", ascending=False).drop(columns=["左侧_反转得分", "左侧_操作建议"])
         
-        output_filename = "量化大脑选基矩阵_v10.xlsx"
+        output_filename = "量化大脑选基矩阵_v11.xlsx"
         with pd.ExcelWriter(output_filename) as writer:
             df_left.to_excel(writer, index=False, sheet_name=f"左侧网格_{market_state}")
             df_right.to_excel(writer, index=False, sheet_name=f"右侧趋势_{market_state}")
             
-        print(f"\n✅ 演算完美收官！底层文件已生成《{output_filename}》。")
+        print(f"\n✅ 演算完美收官！已生成底层物理文件《{output_filename}》。")
         
         send_email_with_excel(output_filename, df_left, df_right, market_state, top_sectors)
         
     else:
-        print("\n\n❌ 未能萃取到有效信号，请检查上游接口状态或网络配置。")
+        print("\n\n❌ 未萃取到有效信号，请检查网络或接口状态。")
