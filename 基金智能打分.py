@@ -4,6 +4,7 @@ import numpy as np
 import re
 import json
 import time
+import random
 import os
 import smtplib
 from datetime import datetime
@@ -15,13 +16,13 @@ import warnings
 
 warnings.filterwarnings('ignore')
 
-print("🚀 启动全维量化大脑 v9.0 (云端自动化部署 + Top10摘要版)...")
+print("🚀 启动全维量化大脑 v9.0 (云端自动化部署优化版)...")
 
 # =========================
 # 全局参数与系统配置
 # =========================
 HEADERS = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
-MAX_WORKERS = 15  
+MAX_WORKERS = 10  # 适当降低并发上限，配合随机休眠更稳妥
 RISK_FREE = 0.02
 MIN_TRADING_DAYS = 120 
 
@@ -64,7 +65,11 @@ def fetch_and_clean_data(code, retries=3):
     
     for attempt in range(retries):
         try:
-            r = requests.get(url, headers=HEADERS, timeout=8)
+            # 引入随机休眠，防范云端并发触发反爬熔断
+            time.sleep(random.uniform(0.5, 1.5))
+            
+            r = requests.get(url, headers=HEADERS, timeout=10)
+            r.raise_for_status()
             text = r.text
 
             name_match = re.search(r'var fS_name = "(.*?)";', text)
@@ -82,7 +87,6 @@ def fetch_and_clean_data(code, retries=3):
             df["close_raw"] = df["y"].astype(float)
             df["ret"] = df["equityReturn"].fillna(0).astype(float) / 100.0
             
-            # 🛡️ 基于每日收益率连乘，还原真实的“累计复权净值”
             df["cum_growth"] = (1 + df["ret"]).cumprod()
             factor = df.iloc[-1]["close_raw"] / df.iloc[-1]["cum_growth"] if df.iloc[-1]["cum_growth"] != 0 else 1
             df["close_adj"] = df["cum_growth"] * factor
@@ -95,8 +99,15 @@ def fetch_and_clean_data(code, retries=3):
             df["BIAS20"] = (df["close_adj"] - df["MA20"]) / df["MA20"]
 
             return name, df
+            
+        except requests.exceptions.RequestException as e:
+            print(f"⚠️ 网络异常 [{code}] (尝试 {attempt+1}/{retries})")
+            time.sleep(2)
+        except json.JSONDecodeError:
+            print(f"⚠️ JSON解析异常 [{code}] (尝试 {attempt+1}/{retries})")
+            time.sleep(2)
         except Exception:
-            time.sleep(1) 
+            time.sleep(2) 
             continue
     return None
 
@@ -199,18 +210,17 @@ def process_fund(code, market_state, top_sectors):
     }
 
 # =========================
-# 自动化邮件推送模块 (包含 Top10 摘要)
+# 自动化邮件推送模块
 # =========================
 def send_email_with_excel(file_path, df_left, df_right, market_state, top_sectors):
-    print("\n📧 正在打包发送投研报表邮件 (包含 Top10 摘要)...")
+    print("\n📧 正在打包发送投研报表邮件...")
     
-    # 严格读取在 GitHub Secrets 中配置的环境变量
     sender = os.getenv('EMAIL_SENDER')
     pwd = os.getenv('EMAIL_PASSWORD')
     receiver = os.getenv('EMAIL_RECEIVER')
     
     if not all([sender, pwd, receiver]):
-        print("⚠️ 提醒: 未检测到完整的邮件配置，跳过发送。")
+        print("⚠️ 提醒: 未检测到完整的邮件配置，跳过发送邮件，文件将通过 GitHub Artifacts 留存。")
         return
 
     msg = MIMEMultipart()
@@ -219,11 +229,9 @@ def send_email_with_excel(file_path, df_left, df_right, market_state, top_sector
     today_str = datetime.now().strftime('%Y-%m-%d')
     msg['Subject'] = f"量化大脑矩阵 v9.0 - {today_str}"
 
-    # 提取左右侧 Top 10 数据
     left_top10 = df_left.head(10)
     right_top10 = df_right.head(10)
 
-    # 构建排版精美的邮件正文
     body = f"自动运行完成，请查收今日的【双引擎】量化评分报表。\n\n"
     body += f"📊 宏观状态: 【{market_state}】\n"
     body += f"🏆 强势赛道 Top 3: {', '.join(top_sectors)}\n\n"
@@ -240,12 +248,8 @@ def send_email_with_excel(file_path, df_left, df_right, market_state, top_sector
     for i, (_, row) in enumerate(right_top10.iterrows(), 1):
         body += f"{i}. {row['代码']} {row['名称']} | 得分: {row['右侧_动量得分']} | 建议: {row['右侧_操作建议']} | 60日动量: {row['60日动量']}%\n"
 
-    body += "\n\n* 详细的完整指标（夏普、回撤、乖离等）及其他基金评分，请查阅附件 Excel。\n"
-    body += "* 技术指标及BIAS均已严格运用累计复权净值推演，剔除分红干扰。"
-
     msg.attach(MIMEText(body, 'plain', 'utf-8'))
 
-    # 挂载 Excel 附件
     try:
         with open(file_path, "rb") as f:
             part = MIMEApplication(f.read(), Name=os.path.basename(file_path))
@@ -255,7 +259,6 @@ def send_email_with_excel(file_path, df_left, df_right, market_state, top_sector
         print(f"❌ 附件读取失败: {e}")
         return
 
-    # 尝试发送请求
     try:
         server = smtplib.SMTP_SSL("smtp.qq.com", 465) 
         server.login(sender, pwd)
@@ -307,7 +310,6 @@ if __name__ == "__main__":
             
         print(f"\n✅ 演算完美收官！底层文件已生成《{output_filename}》。")
         
-        # 触发带 Top10 摘要的邮件系统
         send_email_with_excel(output_filename, df_left, df_right, market_state, top_sectors)
         
     else:
