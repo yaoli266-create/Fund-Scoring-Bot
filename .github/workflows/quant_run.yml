@@ -1,37 +1,69 @@
-name: 量化大脑自动巡检 (v9.0)
+name: 基金量化策略定时运行
 
 on:
   schedule:
-    # 设定在 UTC 时间 23:00 运行（对应东八区早上 07:00）
+    # 北京时间凌晨02:18收盘后运行 (UTC 18:18)
     - cron: '18 18 * * 1-5'
-  
-  # 开启手动触发开关
-  workflow_dispatch: 
+  workflow_dispatch:  # 支持手动触发
 
 jobs:
   run-strategy:
     runs-on: ubuntu-latest
-
+    timeout-minutes: 30  # 超时保护
+    
     steps:
-    - name: 检出代码仓库
+    - name: 检出代码
       uses: actions/checkout@v3
 
-    - name: 配置 Python 环境
+    - name: 设置 Python 环境
       uses: actions/setup-python@v4
       with:
-        python-version: '3.10'
-        cache: 'pip'
+        python-version: '3.9'
+
+    - name: 缓存依赖包
+      uses: actions/cache@v3
+      with:
+        path: ~/.cache/pip
+        key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+        restore-keys: |
+          ${{ runner.os }}-pip-
 
     - name: 安装量化系统依赖包
       run: |
         python -m pip install --upgrade pip
-        pip install requests pandas numpy openpyxl
+        pip install -r requirements.txt
 
-    - name: 启动全维量化大脑进行矩阵推演
+    - name: 运行量化策略
       env:
-        # 确保读取你配置好的机密信息
         EMAIL_SENDER: ${{ secrets.EMAIL_SENDER }}
         EMAIL_PASSWORD: ${{ secrets.EMAIL_PASSWORD }}
         EMAIL_RECEIVER: ${{ secrets.EMAIL_RECEIVER }}
+        EMAIL_SMTP_SERVER: ${{ secrets.EMAIL_SMTP_SERVER }}
+        EMAIL_SMTP_PORT: ${{ secrets.EMAIL_SMTP_PORT }}
+        MAX_WORKERS: ${{ secrets.MAX_WORKERS }}
+        MIN_TRADING_DAYS: ${{ secrets.MIN_TRADING_DAYS }}
+        REQUEST_TIMEOUT: ${{ secrets.REQUEST_TIMEOUT }}
+        REQUEST_RETRIES: ${{ secrets.REQUEST_RETRIES }}
       run: |
         python 基金智能打分.py
+
+    - name: 上传量化报表
+      uses: actions/upload-artifact@v3
+      if: always()
+      with:
+        name: quant-report-${{ github.run_number }}-${{ github.run_attempt }}
+        path: 量化大脑选基矩阵_v9.xlsx
+        retention-days: 30
+
+    - name: 上传运行日志
+      uses: actions/upload-artifact@v3
+      if: always()
+      with:
+        name: quant-logs-${{ github.run_number }}
+        path: quant_run.log
+        retention-days: 7
+
+    - name: 运行失败通知
+      if: failure()
+      run: |
+        echo "::error::量化策略运行失败，请检查日志和配置！"
