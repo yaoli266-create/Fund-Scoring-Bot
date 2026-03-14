@@ -16,15 +16,15 @@ import warnings
 
 warnings.filterwarnings('ignore')
 
-print("🚀 启动全维量化大脑 v9.0 (云端自动化部署优化版)...")
+print("🚀 启动全维量化大脑 v10.0 (Z-Score 自适应进化版)...")
 
 # =========================
 # 全局参数与系统配置
 # =========================
 HEADERS = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
-MAX_WORKERS = 10  # 适当降低并发上限，配合随机休眠更稳妥
+MAX_WORKERS = 10  
 RISK_FREE = 0.02
-MIN_TRADING_DAYS = 120 
+MIN_TRADING_DAYS = 252 # 提高最低交易日要求，确保 Z-Score 计算有足量的一年期样本
 
 # 宏观基准与行业风向标 ETF 配置
 BENCHMARK_CODE = "510300"  
@@ -57,7 +57,7 @@ def get_sector_by_name(name):
     return "宽基/其他"
 
 # =========================
-# 核心数据拉取与清洗
+# 核心数据拉取与清洗 (植入自适应基因)
 # =========================
 def fetch_and_clean_data(code, retries=3):
     code = str(code).zfill(6)
@@ -65,7 +65,6 @@ def fetch_and_clean_data(code, retries=3):
     
     for attempt in range(retries):
         try:
-            # 引入随机休眠，防范云端并发触发反爬熔断
             time.sleep(random.uniform(0.5, 1.5))
             
             r = requests.get(url, headers=HEADERS, timeout=10)
@@ -91,20 +90,23 @@ def fetch_and_clean_data(code, retries=3):
             factor = df.iloc[-1]["close_raw"] / df.iloc[-1]["cum_growth"] if df.iloc[-1]["cum_growth"] != 0 else 1
             df["close_adj"] = df["cum_growth"] * factor
 
+            # 基础技术指标
             df["MA20"] = df["close_adj"].rolling(20).mean()
             df["MA60"] = df["close_adj"].rolling(60).mean()
             df["MA120"] = df["close_adj"].rolling(120).mean()
             df["MA200"] = df["close_adj"].rolling(200).mean()
-            
             df["BIAS20"] = (df["close_adj"] - df["MA20"]) / df["MA20"]
+
+            # 👑 核心引擎进化：计算滚动 252 日波动的 Z-Score
+            df["ROLL_BIAS_MEAN"] = df["BIAS20"].rolling(252).mean()
+            df["ROLL_BIAS_STD"] = df["BIAS20"].rolling(252).std()
+            df["BIAS_ZSCORE"] = (df["BIAS20"] - df["ROLL_BIAS_MEAN"]) / df["ROLL_BIAS_STD"]
 
             return name, df
             
-        except requests.exceptions.RequestException as e:
-            print(f"⚠️ 网络异常 [{code}] (尝试 {attempt+1}/{retries})")
+        except requests.exceptions.RequestException:
             time.sleep(2)
         except json.JSONDecodeError:
-            print(f"⚠️ JSON解析异常 [{code}] (尝试 {attempt+1}/{retries})")
             time.sleep(2)
         except Exception:
             time.sleep(2) 
@@ -164,24 +166,35 @@ def process_fund(code, market_state, top_sectors):
     
     max_1y, min_1y = df_1y["close_adj"].max(), df_1y["close_adj"].min()
     pct1 = (latest["close_adj"] - min_1y) / (max_1y - min_1y) if max_1y > min_1y else 1.0
-    bias20 = latest["BIAS20"]
+    
+    # 提取自适应评分关键参数
+    bias_zscore = latest["BIAS_ZSCORE"]
 
-    # 策略A：左侧抄底网格引擎
+    # =========================
+    # 策略A：左侧抄底自适应引擎
+    # =========================
     score_L = 50
     if pct1 < 0.1: score_L += 30
     elif pct1 < 0.2: score_L += 20
     elif pct1 > 0.8: score_L -= 20
     
-    if pd.notnull(bias20):
-        if bias20 < -0.08: score_L += 25
-        elif bias20 > 0.05: score_L -= 15
+    if pd.notnull(bias_zscore):
+        # 使用 Z-Score 取代绝对的 -8% 或 5%
+        if bias_zscore < -2.0: 
+            score_L += 25  # 击穿自身历史极端下轨，给予满额加分
+        elif bias_zscore < -1.5:
+            score_L += 15  # 触及自身历史较度恐慌线
+        elif bias_zscore > 1.5: 
+            score_L -= 15  # 阶段性严重超买，扣分
         
     if market_state == "牛市": score_L -= 10
     elif market_state == "熊市": score_L += 10
 
     sig_L = "☄️ 砸锅卖铁" if score_L >= 85 else "💰 分批建仓" if score_L >= 65 else "⏳ 观望"
 
+    # =========================
     # 策略B：右侧趋势轮动引擎
+    # =========================
     score_R = 50
     if pd.notnull(latest["MA120"]):
         if latest["close_adj"] > latest["MA20"] > latest["MA60"] > latest["MA120"]:
@@ -204,7 +217,7 @@ def process_fund(code, market_state, top_sectors):
         "代码": code, "名称": name, "所属赛道": sector,
         "左侧_反转得分": score_L, "左侧_操作建议": sig_L,
         "右侧_动量得分": score_R, "右侧_操作建议": sig_R,
-        "1年百分位": pct1, "20日乖离率": bias20, 
+        "1年百分位": pct1, "恐慌极值度(Z-Score)": bias_zscore, 
         "60日动量": mom60, "夏普比率": sharpe,
         "最大回撤": max_dd, "年化波动率": vol
     }
@@ -227,20 +240,20 @@ def send_email_with_excel(file_path, df_left, df_right, market_state, top_sector
     msg['From'] = sender
     msg['To'] = receiver
     today_str = datetime.now().strftime('%Y-%m-%d')
-    msg['Subject'] = f"量化大脑矩阵 v9.0 - {today_str}"
+    msg['Subject'] = f"量化大脑矩阵 v10.0 - {today_str}"
 
     left_top10 = df_left.head(10)
     right_top10 = df_right.head(10)
 
-    body = f"自动运行完成，请查收今日的【双引擎】量化评分报表。\n\n"
+    body = f"自动运行完成，请查收今日的【双引擎】量化评分报表 (自适应版)。\n\n"
     body += f"📊 宏观状态: 【{market_state}】\n"
     body += f"🏆 强势赛道 Top 3: {', '.join(top_sectors)}\n\n"
 
     body += "====================================\n"
-    body += "🟢 策略A：左侧网格 (低估反转) TOP 10\n"
+    body += "🟢 策略A：左侧网格 (恐慌自适应) TOP 10\n"
     body += "====================================\n"
     for i, (_, row) in enumerate(left_top10.iterrows(), 1):
-        body += f"{i}. {row['代码']} {row['名称']} | 得分: {row['左侧_反转得分']} | 建议: {row['左侧_操作建议']} | 1年位置: {row['1年百分位']}%\n"
+        body += f"{i}. {row['代码']} {row['名称']} | 得分: {row['左侧_反转得分']} | 建议: {row['左侧_操作建议']} | 恐慌度: {row['恐慌极值度(Z-Score)']} Sigma\n"
 
     body += "\n====================================\n"
     body += "🔴 策略B：右侧趋势 (动量轮动) TOP 10\n"
@@ -292,18 +305,18 @@ if __name__ == "__main__":
 
     if results:
         df_out = pd.DataFrame(results)
-        pct_cols = ["1年百分位", "20日乖离率", "60日动量", "最大回撤", "年化波动率"]
+        pct_cols = ["1年百分位", "60日动量", "最大回撤", "年化波动率"]
         for col in pct_cols:
             df_out[col] = df_out[col].astype(float) * 100
             
         df_out = df_out.round({"左侧_反转得分": 1, "右侧_动量得分": 1, "夏普比率": 2, 
-                               "1年百分位": 1, "20日乖离率": 2, "60日动量": 1, 
+                               "1年百分位": 1, "恐慌极值度(Z-Score)": 2, "60日动量": 1, 
                                "最大回撤": 1, "年化波动率": 1})
         
         df_left = df_out.sort_values("左侧_反转得分", ascending=False).drop(columns=["右侧_动量得分", "右侧_操作建议"])
         df_right = df_out.sort_values("右侧_动量得分", ascending=False).drop(columns=["左侧_反转得分", "左侧_操作建议"])
         
-        output_filename = "量化大脑选基矩阵_v9.xlsx"
+        output_filename = "量化大脑选基矩阵_v10.xlsx"
         with pd.ExcelWriter(output_filename) as writer:
             df_left.to_excel(writer, index=False, sheet_name=f"左侧网格_{market_state}")
             df_right.to_excel(writer, index=False, sheet_name=f"右侧趋势_{market_state}")
