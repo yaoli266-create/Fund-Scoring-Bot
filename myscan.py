@@ -9,25 +9,23 @@ import time
 import os
 import smtplib
 from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
+from email.mime.application import MIMEApplication
 from email.header import Header
 import warnings
 
-# 忽略警告信息
 warnings.filterwarnings('ignore')
 console = Console()
 
-# ==========================================
-# 1. 全局配置
-# ==========================================
-RUN_MODE = os.getenv("RUN_MODE", "realtime")  # 默认实时模式
-BACKTEST_DATE = "2024-11-20"                 # 回测日期
-HOLD_DAYS = 5                                # 回测持股周期
-MAX_WORKERS = 30                             # 并发线程数
+RUN_MODE = os.getenv("RUN_MODE", "realtime")
+BACKTEST_DATE = "2024-11-20"
+HOLD_DAYS = 5
+MAX_WORKERS = 30
 
 class SequoiaUltimate:
     def __init__(self):
-        self.min_volume = 150000000  # 成交额门槛 1.5亿
-        self.market_breadth = 0      # 市场多头占比
+        self.min_volume = 150000000
+        self.market_breadth = 0
 
     def calculate_score(self, row, hist_df):
         try:
@@ -77,8 +75,7 @@ class SequoiaUltimate:
                 }
         except: return None
 
-    # --- 修正后的邮件发送逻辑 ---
-    def send_email_report(self, df_top10):
+    def send_email_with_excel(self, df_results, excel_path):
         sender = os.getenv('EMAIL_USER')
         password = os.getenv('EMAIL_PASS')
         receiver = os.getenv('EMAIL_RECEIVER')
@@ -88,40 +85,39 @@ class SequoiaUltimate:
 
         date_str = datetime.now().strftime('%Y-%m-%d')
         
-        # 1. 先定义头部内容
-        head = f"🚀 Sequoia-X 今日选股报告 ({date_str})\n"
-        breadth = f"当前全市场多头占比: {self.market_breadth:.1f}%\n"
-        line_sep = "-" * 40 + "\n"
-        
-        content = head + breadth + line_sep
-
-        # 2. 逐行添加数据，避免超长字符串
-        for _, row in df_top10.iterrows():
-            s = str(row['综合评分'])
-            c = str(row['代码'])
-            n = str(row['名称'])
-            p = str(row['最新价'])
-            z = str(row['涨跌幅'])
-            h = str(row['换手率'])
-            
-            # 拆分拼接，确保万无一失
-            item = "【" + s + "分】" + c + " " + n + " | 现价:" + p + " | 涨幅:" + z + "% | 换手:" + h + "%\n"
-            content += item
-        
-        msg = MIMEText(content, 'plain', 'utf-8')
+        # 创建多部分邮件对象
+        msg = MIMEMultipart()
         msg['From'] = sender
         msg['To'] = receiver
-        msg['Subject'] = Header("Sequoia-X 选股报告 - " + date_str, 'utf-8')
+        msg['Subject'] = Header(f"Sequoia-X 选股报告 - {date_str}", 'utf-8')
 
+        # 邮件正文
+        body = f"🚀 Sequoia-X 今日选股报告 ({date_str})
+"
+        body += f"当前全市场多头占比: {self.market_breadth:.1f}%
+"
+        body += "详细名单见附件 Excel 文件。
+"
+        msg.attach(MIMEText(body, 'plain', 'utf-8'))
+
+        # 添加 Excel 附件
+        try:
+            with open(excel_path, 'rb') as f:
+                part = MIMEApplication(f.read())
+                part.add_header('Content-Disposition', 'attachment', filename=os.path.basename(excel_path))
+                msg.attach(part)
+        except Exception as e:
+            console.print(f"[red]附件添加失败: {e}[/red]")
+
+        # 发送邮件
         try:
             smtp_server = "smtp.qq.com" 
             with smtplib.SMTP_SSL(smtp_server, 465) as server:
                 server.login(sender, password)
                 server.sendmail(sender, [receiver], msg.as_string())
-            console.print("[bold green]邮件报告已成功发送！[/bold green]")
+            console.print("[bold green]邮件报告及附件已成功发送！[/bold green]")
         except Exception as e:
             console.print(f"[bold red]邮件发送失败: {e}[/bold red]")
-
 
     def run(self):
         console.print(f"[bold cyan]▶ Sequoia-X 启动模式: {RUN_MODE}[/bold cyan]")
@@ -144,18 +140,25 @@ class SequoiaUltimate:
         final_df = pd.DataFrame(results)
         if not final_df.empty:
             final_df = final_df.sort_values("综合评分", ascending=False)
-            # 打印表格
+            
+            # 导出 Excel
+            date_str = datetime.now().strftime('%Y%m%d')
+            file_name = f"Sequoia_Report_{date_str}.xlsx"
+            final_df.to_excel(file_name, index=False)
+            console.print(f"[green]结果已导出至: {file_name}[/green]")
+
+            # 打印控制台表格
             table = Table(title="Sequoia-X 选股结果")
             table.add_column("评分", style="red")
             table.add_column("代码", style="cyan")
             table.add_column("名称")
-            table.add_column("最新价")
             for _, row in final_df.head(15).iterrows():
-                table.add_row(str(row['综合评分']), row['代码'], row['名称'], str(row['最新价']))
+                table.add_row(str(row['综合评分']), row['代码'], row['名称'])
             console.print(table)
 
+            # 实时模式下发送邮件
             if RUN_MODE == "realtime":
-                self.send_email_report(final_df.head(10))
+                self.send_email_with_excel(final_df, file_name)
         else:
             console.print("[yellow]今日无符合条件的选股结果。[/yellow]")
 
