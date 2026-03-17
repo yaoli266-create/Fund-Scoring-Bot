@@ -78,7 +78,7 @@ class SequoiaUltimate:
         except: return None
 
     # --- 修正后的邮件发送逻辑 ---
-    def send_email_report(self, df_top10):
+        def send_email_report(self, df_top10):
         sender = os.getenv('EMAIL_USER')
         password = os.getenv('EMAIL_PASS')
         receiver = os.getenv('EMAIL_RECEIVER')
@@ -87,20 +87,31 @@ class SequoiaUltimate:
             return
 
         date_str = datetime.now().strftime('%Y-%m-%d')
-        # 使用三引号确保多行文本不会报错
-        content = f"""🚀 Sequoia-X 今日选股报告 ({date_str})
-当前全市场多头占比: {self.market_breadth:.1f}%
-{"-" * 40}
-"""
+        
+        # 1. 先定义头部内容
+        head = f"🚀 Sequoia-X 今日选股报告 ({date_str})\n"
+        breadth = f"当前全市场多头占比: {self.market_breadth:.1f}%\n"
+        line_sep = "-" * 40 + "\n"
+        
+        content = head + breadth + line_sep
+
+        # 2. 逐行添加数据，避免超长字符串
         for _, row in df_top10.iterrows():
-            line = f"【{row['综合评分']}分】{row['代码']} {row['名称']} | 现价:{row['最新价']} | 涨幅:{row['涨跌幅']}% | 换手:{row['换手率']}%
-"
-            content += line
+            s = str(row['综合评分'])
+            c = str(row['代码'])
+            n = str(row['名称'])
+            p = str(row['最新价'])
+            z = str(row['涨跌幅'])
+            h = str(row['换手率'])
+            
+            # 拆分拼接，确保万无一失
+            item = "【" + s + "分】" + c + " " + n + " | 现价:" + p + " | 涨幅:" + z + "% | 换手:" + h + "%\n"
+            content += item
         
         msg = MIMEText(content, 'plain', 'utf-8')
         msg['From'] = sender
         msg['To'] = receiver
-        msg['Subject'] = Header(f"Sequoia-X 选股报告 - {date_str}", 'utf-8')
+        msg['Subject'] = Header("Sequoia-X 选股报告 - " + date_str, 'utf-8')
 
         try:
             smtp_server = "smtp.qq.com" 
@@ -110,6 +121,7 @@ class SequoiaUltimate:
             console.print("[bold green]邮件报告已成功发送！[/bold green]")
         except Exception as e:
             console.print(f"[bold red]邮件发送失败: {e}[/bold red]")
+
 
     def run(self):
         console.print(f"[bold cyan]▶ Sequoia-X 启动模式: {RUN_MODE}[/bold cyan]")
