@@ -92,9 +92,9 @@ class SequoiaUltimate:
         msg['Subject'] = Header(f"Sequoia-X 选股报告 - {date_str}", 'utf-8')
 
         # 邮件正文
-        body = f"🚀 Sequoia-X 今日选股报告 ({date_str})
-        body += f"当前全市场多头占比: {self.market_breadth:.1f}%
-        body += "详细名单见附件 Excel 文件。
+        body = f"🚀 Sequoia-X 今日选股报告 ({date_str})"
+        body += f"当前全市场多头占比: {self.market_breadth:.1f}%"
+        body += "详细名单见附件 Excel 文件。"
         msg.attach(MIMEText(body, 'plain', 'utf-8'))
 
         # 添加 Excel 附件
