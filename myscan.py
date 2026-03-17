@@ -78,7 +78,7 @@ class SequoiaUltimate:
         except: return None
 
     # --- 修正后的邮件发送逻辑 ---
-        def send_email_report(self, df_top10):
+    def send_email_report(self, df_top10):
         sender = os.getenv('EMAIL_USER')
         password = os.getenv('EMAIL_PASS')
         receiver = os.getenv('EMAIL_RECEIVER')
