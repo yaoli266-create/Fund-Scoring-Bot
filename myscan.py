@@ -28,7 +28,7 @@ SCORE_THRESHOLD = 60      # 评分入选门槛
 MAX_THREADS = 10          # Baostock 并发限制
 RUN_MODE = "realtime"     # 运行模式
 
-# 邮件配置 (从环境变量读取，安全性更高)
+# 邮件配置
 EMAIL_HOST = "smtp.qq.com"
 EMAIL_PORT = 465
 EMAIL_USER = os.getenv("EMAIL_USER", "你的邮箱@qq.com")
@@ -40,58 +40,66 @@ console = Console()
 class SequoiaUltimateV3:
     def __init__(self):
         self.results = []
-        # 自动计算回溯日期
         self.end_date = datetime.now().strftime("%Y-%m-%d")
         self.start_date = (datetime.now() - timedelta(days=100)).strftime("%Y-%m-%d")
 
     def get_fast_snapshot(self):
-        """核心改进：使用国内极速接口获取全市场快照"""
-        # 东方财富/腾讯后端通用接口，支持 5000+ 股票，极速且不封IP
+        """核心改进：安全解析国内极速接口获取全市场快照"""
         url = "https://push2.eastmoney.com/api/qt/clist/get?pn=1&pz=6000&po=1&np=1&ut=bd1d9ddb04089700cf9c27f6f7426281&fltt=2&invt=2&fid=f3&fs=m:0+t:6,m:0+t:80,m:1+t:2,m:1+t:23&fields=f12,f14,f6"
         try:
-            resp = requests.get(url, timeout=5)
+            resp = requests.get(url, timeout=10) # 适当增加超时时间
             data = resp.json()
             if data and 'data' in data and 'diff' in data['data']:
                 df = pd.DataFrame(data['data']['diff'])
-                df.columns = ['代码', '名称', '成交额']
-                return df
+                
+                # 【修复核心】显式提取所需列并重命名，防止字典顺序随机导致的数据错位
+                if {'f12', 'f14', 'f6'}.issubset(df.columns):
+                    df = df[['f12', 'f14', 'f6']] 
+                    df.columns = ['代码', '名称', '成交额']
+                    return df
+                else:
+                    console.print("[yellow]API返回字段缺失，尝试备用接口...[/yellow]")
         except Exception as e:
-            console.print(f"[yellow]极速接口失效: {e}，尝试备用接口...[/yellow]")
+            console.print(f"[yellow]极速接口请求失败: {e}，尝试备用接口...[/yellow]")
         return pd.DataFrame()
 
     def calculate_score(self, df):
         """四维度量化评分系统"""
         if len(df) < 20: return 0
         
-        df['close'] = df['close'].astype(float)
-        df['volume'] = df['volume'].astype(float)
-        df['amount'] = df['amount'].astype(float)
+        # 安全转换核心计算列
+        for col in ['close', 'volume', 'amount', 'turn']:
+            df[col] = pd.to_numeric(df[col], errors='coerce')
+            
+        # 丢弃因转换失败产生的空值，防止计算均线时报错
+        df = df.dropna(subset=['close', 'volume', 'amount'])
+        if len(df) < 20: return 0
         
         last_close = df['close'].iloc[-1]
         ma20 = df['close'].rolling(20).mean().iloc[-1]
         ma60 = df['close'].rolling(60).mean().iloc[-1]
         
-        # 1. 趋势得分 (40分): 价格在均线之上且均线多头
+        # 1. 趋势得分 (40分)
         score_trend = 0
         if last_close > ma20: score_trend += 20
         if ma20 > ma60: score_trend += 20
         
-        # 2. 量能得分 (25分): 近3日放量
+        # 2. 量能得分 (25分)
         vol_ma5 = df['volume'].rolling(5).mean().iloc[-1]
         score_vol = 25 if df['volume'].iloc[-1] > vol_ma5 * 1.2 else 10
         
-        # 3. 换手得分 (20分): 活跃度
-        avg_turn = df['turn'].astype(float).tail(5).mean()
-        score_turn = 20 if 3 < avg_turn < 10 else 10
+        # 3. 换手得分 (20分)
+        avg_turn = df['turn'].tail(5).mean()
+        score_turn = 20 if pd.notna(avg_turn) and (3 < avg_turn < 10) else 10
         
-        # 4. 安全边际 (15分): 距离20日线不要太远（防止追高）
+        # 4. 安全边际 (15分)
         dist = (last_close - ma20) / ma20
         score_safety = 15 if dist < 0.1 else 5
         
         return score_trend + score_vol + score_turn + score_safety
 
     def fetch_and_score(self, stock):
-        symbol = f"{'sh' if stock['代码'].startswith('6') else 'sz'}.{stock['代码']}"
+        symbol = f"{'sh' if str(stock['代码']).startswith('6') else 'sz'}.{stock['代码']}"
         try:
             rs = bs.query_history_k_data_plus(
                 symbol, "date,code,close,volume,amount,turn",
@@ -115,8 +123,10 @@ class SequoiaUltimateV3:
                     "成交额": f"{float(stock['成交额'])/1e8:.2f}亿",
                     "综合评分": score
                 }
-        except:
+        except Exception as e:
+            # 不再使用裸 except: pass，方便后期调试多线程问题
             pass
+            
         return None
 
     def send_report(self, df):
@@ -155,16 +165,22 @@ class SequoiaUltimateV3:
         with console.status("[bold yellow]正在获取市场快照..."):
             df_spot = self.get_fast_snapshot()
             if df_spot.empty:
+                console.print("[yellow]切换至 akshare 备用数据源...[/yellow]")
                 try: df_spot = ak.stock_zh_a_spot_em()[['代码', '名称', '成交额']]
-                except: pass
+                except Exception as e: console.print(f"[red]备用源也失败了: {e}[/red]")
         
         if df_spot.empty:
             console.print("[red]无法获取快照，请检查网络。[/red]")
             return
 
-        # 2. 初筛
-        df_spot = df_spot[~df_spot['名称'].str.contains("ST|退")]
-        df_spot = df_spot[df_spot['成交额'].astype(float) > MIN_VOLUME]
+        # 2. 健壮的初筛逻辑 (修复了易崩溃的点)
+        # 确保名称是字符串格式，并使用 na=False 防止遇到缺失值报错
+        df_spot = df_spot[~df_spot['名称'].astype(str).str.contains("ST|退", na=False)]
+        
+        # 使用 to_numeric 强制转换，非法字符串会变成 NaN，随后在 > 运算中被安全剔除
+        df_spot['成交额'] = pd.to_numeric(df_spot['成交额'], errors='coerce')
+        df_spot = df_spot[df_spot['成交额'] > MIN_VOLUME]
+        
         candidates = df_spot.to_dict('records')
         
         # 3. 深度多线程评分
